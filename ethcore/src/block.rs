@@ -359,31 +359,8 @@ impl<'x> OpenBlock<'x> {
 		}
 	}
 
-	/// Turn this into a `ClosedBlock`.
-	pub fn close(self) -> ClosedBlock {
-		let mut s = self;
-
-		let unclosed_state = s.block.state.clone();
-
-		s.engine.on_close_block(&mut s.block);
-		s.block.base.header.set_transactions_root(ordered_trie_root(s.block.base.transactions.iter().map(|e| e.rlp_bytes().to_vec())));
-		let uncle_bytes = s.block.base.uncles.iter().fold(RlpStream::new_list(s.block.base.uncles.len()), |mut s, u| {s.append_raw(&u.rlp(Seal::With), 1); s} ).out();
-		s.block.base.header.set_uncles_hash(uncle_bytes.sha3());
-		s.block.base.header.set_state_root(s.block.state.root().clone());
-		s.block.base.header.set_receipts_root(ordered_trie_root(s.block.receipts.iter().map(|r| r.rlp_bytes().to_vec())));
-		s.block.base.header.set_log_bloom(s.block.receipts.iter().fold(LogBloom::zero(), |mut b, r| {b = &b | &r.log_bloom; b})); //TODO: use |= operator
-		s.block.base.header.set_gas_used(s.block.receipts.last().map_or(U256::zero(), |r| r.gas_used));
-
-		ClosedBlock {
-			block: s.block,
-			uncle_bytes: uncle_bytes,
-			last_hashes: s.last_hashes,
-			unclosed_state: unclosed_state,
-		}
-	}
-
-	/// Turn this into a `LockedBlock`.
-	pub fn close_and_lock(self) -> LockedBlock {
+	/// Internal finalization function shared by `close` and `close_and_lock`.
+	fn close_internal(self) -> (ExecutedBlock, Bytes, Arc<LastHashes>) {
 		let mut s = self;
 
 		s.engine.on_close_block(&mut s.block);
@@ -402,8 +379,26 @@ impl<'x> OpenBlock<'x> {
 		s.block.base.header.set_log_bloom(s.block.receipts.iter().fold(LogBloom::zero(), |mut b, r| {b = &b | &r.log_bloom; b})); //TODO: use |= operator
 		s.block.base.header.set_gas_used(s.block.receipts.last().map_or(U256::zero(), |r| r.gas_used));
 
+		(s.block, uncle_bytes, s.last_hashes)
+	}
+
+	/// Turn this into a `ClosedBlock`.
+	pub fn close(self) -> ClosedBlock {
+		let unclosed_state = self.block.state.clone();
+		let (block, uncle_bytes, last_hashes) = self.close_internal();
+		ClosedBlock {
+			block: block,
+			uncle_bytes: uncle_bytes,
+			last_hashes: last_hashes,
+			unclosed_state: unclosed_state,
+		}
+	}
+
+	/// Turn this into a `LockedBlock`.
+	pub fn close_and_lock(self) -> LockedBlock {
+		let (block, uncle_bytes, _) = self.close_internal();
 		LockedBlock {
-			block: s.block,
+			block: block,
 			uncle_bytes: uncle_bytes,
 		}
 	}
