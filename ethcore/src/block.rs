@@ -505,17 +505,17 @@ impl IsBlock for SealedBlock {
 
 /// Enact the block given by block header, transactions and uncles
 #[cfg_attr(feature="dev", allow(too_many_arguments))]
-pub fn enact(
+pub fn enact<'a>(
 	header: &Header,
 	transactions: &[SignedTransaction],
 	uncles: &[Header],
-	engine: &Engine,
+	engine: &'a Engine,
 	tracing: bool,
 	db: StateDB,
 	parent: &Header,
 	last_hashes: Arc<LastHashes>,
 	factories: Factories,
-) -> Result<LockedBlock, Error> {
+) -> Result<OpenBlock<'a>, Error> {
 	{
 		if ::log::max_log_level() >= ::log::LogLevel::Trace {
 			let s = State::from_existing(db.boxed_clone(), parent.state_root().clone(), engine.account_start_nonce(), factories.clone())?;
@@ -537,7 +537,7 @@ pub fn enact(
 	for u in uncles {
 		b.push_uncle(u.clone())?;
 	}
-	Ok(b.close_and_lock())
+	Ok(b)
 }
 
 #[inline]
@@ -568,15 +568,15 @@ fn push_transactions(block: &mut OpenBlock, transactions: &[SignedTransaction]) 
 
 /// Enact the block given by `block_bytes` using `engine` on the database `db` with given `parent` block header
 #[cfg_attr(feature="dev", allow(too_many_arguments))]
-pub fn enact_verified(
+pub fn enact_verified<'a>(
 	block: &PreverifiedBlock,
-	engine: &Engine,
+	engine: &'a Engine,
 	tracing: bool,
 	db: StateDB,
 	parent: &Header,
 	last_hashes: Arc<LastHashes>,
 	factories: Factories,
-) -> Result<LockedBlock, Error> {
+) -> Result<OpenBlock<'a>, Error> {
 	let view = BlockView::new(&block.bytes);
 	enact(&block.header, &block.transactions, &view.uncles(), engine, tracing, db, parent, last_hashes, factories)
 }
@@ -609,7 +609,7 @@ mod tests {
 	) -> Result<LockedBlock, Error> {
 		let block = BlockView::new(block_bytes);
 		let header = block.header();
-		enact(&header, &block.transactions(), &block.uncles(), engine, tracing, db, parent, last_hashes, factories)
+		enact(&header, &block.transactions(), &block.uncles(), engine, tracing, db, parent, last_hashes, factories).map(OpenBlock::close_and_lock)
 	}
 
 	/// Enact the block given by `block_bytes` using `engine` on the database `db` with given `parent` block header. Seal the block aferwards

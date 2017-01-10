@@ -363,7 +363,7 @@ impl Client {
 		true
 	}
 
-	fn lock_block(&self, block: &PreverifiedBlock) -> Result<LockedBlock, ()> {
+	fn enact_block(&self, block: &PreverifiedBlock) -> Result<OpenBlock, ()> {
 		let header = &block.header;
 		// Check if Parent is in chain
 		let chain_has_parent = self.chain.read().block_header(header.parent_hash());
@@ -373,10 +373,10 @@ impl Client {
 			let db = self.state_db.lock().boxed_clone_canon(header.parent_hash());
 
 			let enact_result = enact_verified(block, self.engine.as_ref(), self.tracedb.read().tracing_enabled(), db, &parent, last_hashes, self.factories.clone());
-			let locked_block = enact_result.map_err(|e| {
+			let open_block = enact_result.map_err(|e| {
 				warn!(target: "client", "Block import failed for #{} ({})\nError: {:?}", header.number(), header.hash(), e);
 			})?;
-			Ok(locked_block)
+			Ok(open_block)
 		} else {
 			warn!(target: "client", "Block import failed for #{} ({}): Parent not found ({}) ", header.number(), header.hash(), header.parent_hash());
 			Err(())
@@ -450,25 +450,31 @@ impl Client {
 					invalid_blocks.insert(header.hash());
 					continue;
 				}
-				if let Ok(locked_block) = self.lock_block(&block) {
-					if !self.is_good_block_final(header, locked_block.block().header()) {
-						invalid_blocks.insert(header.hash());
-						continue;
-					}
+				if let Ok(open_block) = self.enact_block(&block) {
+					// If its a proposal close (state clone) and insert into the sealing queue. 
 					if self.engine.is_proposal(&block.header) {
-						self.block_queue.mark_as_good(&[header.hash()]);
-						proposed_blocks.push(block.bytes);
+						let closed_block = open_block.close();
+						if self.is_good_block_final(header, closed_block.block().header()) {
+							self.block_queue.mark_as_good(&[header.hash()]);
+							proposed_blocks.push(block.bytes);
+							self.miner.insert_to_sealing_queue(closed_block);
+							continue;
+						}
 					} else {
-						imported_blocks.push(header.hash());
+						// If not a proposal dont do any state cloning (lock).
+						let locked_block = open_block.close_and_lock();
+						if self.is_good_block_final(header, locked_block.block().header()) {
+							imported_blocks.push(header.hash());
 
-						let route = self.commit_block(locked_block, &header.hash(), &block.bytes);
-						import_results.push(route);
+							let route = self.commit_block(locked_block, &header.hash(), &block.bytes);
+							import_results.push(route);
 
-						self.report.write().accrue_block(&block);
+							self.report.write().accrue_block(&block);
+							continue;
+						}
 					}
-				} else {
-					invalid_blocks.insert(header.hash());
 				}
+				invalid_blocks.insert(header.hash());
 			}
 
 			let imported = imported_blocks.len();
