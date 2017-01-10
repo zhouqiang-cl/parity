@@ -34,7 +34,7 @@ use util::kvdb::*;
 use io::*;
 use views::BlockView;
 use error::{ImportError, ExecutionError, CallError, BlockError, ImportResult, Error as EthcoreError};
-use header::BlockNumber;
+use header::{Header, BlockNumber};
 use state::{State, CleanupMode};
 use spec::Spec;
 use basic_types::Seal;
@@ -343,8 +343,7 @@ impl Client {
 		Arc::new(last_hashes)
 	}
 
-	fn check_and_close_block(&self, block: &PreverifiedBlock) -> Result<LockedBlock, ()> {
-		let engine = &*self.engine;
+	fn is_good_block_family(&self, block: &PreverifiedBlock) -> bool {
 		let header = &block.header;
 
 		let chain = self.chain.read();
@@ -352,38 +351,46 @@ impl Client {
 		let best_block_number = chain.best_block_number();
 		if best_block_number >= self.history && header.number() <= best_block_number - self.history {
 			warn!(target: "client", "Block import failed for #{} ({})\nBlock is ancient (current best block: #{}).", header.number(), header.hash(), best_block_number);
-			return Err(());
+			return false;
 		}
 
 		// Verify Block Family
-		let verify_family_result = self.verifier.verify_block_family(header, &block.bytes, engine, &**chain);
+		let verify_family_result = self.verifier.verify_block_family(header, &block.bytes, self.engine.as_ref(), &**chain);
 		if let Err(e) = verify_family_result {
 			warn!(target: "client", "Stage 3 block verification failed for #{} ({})\nError: {:?}", header.number(), header.hash(), e);
-			return Err(());
+			return false;
 		};
+		true
+	}
 
+	fn lock_block(&self, block: &PreverifiedBlock) -> Result<LockedBlock, ()> {
+		let header = &block.header;
 		// Check if Parent is in chain
-		let chain_has_parent = chain.block_header(header.parent_hash());
+		let chain_has_parent = self.chain.read().block_header(header.parent_hash());
 		if let Some(parent) = chain_has_parent {
 			// Enact Verified Block
 			let last_hashes = self.build_last_hashes(header.parent_hash().clone());
 			let db = self.state_db.lock().boxed_clone_canon(header.parent_hash());
 
-			let enact_result = enact_verified(block, engine, self.tracedb.read().tracing_enabled(), db, &parent, last_hashes, self.factories.clone());
+			let enact_result = enact_verified(block, self.engine.as_ref(), self.tracedb.read().tracing_enabled(), db, &parent, last_hashes, self.factories.clone());
 			let locked_block = enact_result.map_err(|e| {
 				warn!(target: "client", "Block import failed for #{} ({})\nError: {:?}", header.number(), header.hash(), e);
 			})?;
-
-			// Final Verification
-			if let Err(e) = self.verifier.verify_block_final(header, locked_block.block().header()) {
-				warn!(target: "client", "Stage 4 block verification failed for #{} ({})\nError: {:?}", header.number(), header.hash(), e);
-				return Err(());
-			}
-
 			Ok(locked_block)
 		} else {
 			warn!(target: "client", "Block import failed for #{} ({}): Parent not found ({}) ", header.number(), header.hash(), header.parent_hash());
 			Err(())
+		}
+	}
+
+	/// Final Verification
+	fn is_good_block_final(&self, actual_header: &Header, constructed_header: &Header) -> bool {
+		match self.verifier.verify_block_final(actual_header, constructed_header) {
+			Ok(_) => true,
+			Err(e) => {
+				warn!(target: "client", "Stage 4 block verification failed for #{} ({})\nError: {:?}", actual_header.number(), actual_header.hash(), e);
+				false
+			}
 		}
 	}
 
@@ -439,18 +446,22 @@ impl Client {
 			for block in blocks {
 				let header = &block.header;
 				let is_invalid = invalid_blocks.contains(header.parent_hash());
-				if is_invalid {
+				if is_invalid || !self.is_good_block_family(&block) {
 					invalid_blocks.insert(header.hash());
 					continue;
 				}
-				if let Ok(closed_block) = self.check_and_close_block(&block) {
+				if let Ok(locked_block) = self.lock_block(&block) {
+					if !self.is_good_block_final(header, locked_block.block().header()) {
+						invalid_blocks.insert(header.hash());
+						continue;
+					}
 					if self.engine.is_proposal(&block.header) {
 						self.block_queue.mark_as_good(&[header.hash()]);
 						proposed_blocks.push(block.bytes);
 					} else {
 						imported_blocks.push(header.hash());
 
-						let route = self.commit_block(closed_block, &header.hash(), &block.bytes);
+						let route = self.commit_block(locked_block, &header.hash(), &block.bytes);
 						import_results.push(route);
 
 						self.report.write().accrue_block(&block);

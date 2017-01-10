@@ -224,7 +224,7 @@ pub struct ClosedBlock {
 
 /// Just like `ClosedBlock` except that we can't reopen it and it's faster.
 ///
-/// We actually store the post-`Engine::on_close_block` state, unlike in `ClosedBlock` where it's the pre.
+/// No pre `Engine::on_close_block` state is stored, unlike in `ClosedBlock`.
 #[derive(Clone)]
 pub struct LockedBlock {
 	block: ExecutedBlock,
