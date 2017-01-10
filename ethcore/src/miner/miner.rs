@@ -462,6 +462,13 @@ impl Miner {
 		}
 	}
 
+	/// Puts a block in the sealing queue for later sealing.
+	pub fn insert_to_sealing_queue(&self, block: ClosedBlock) {
+		let mut sealing_work = self.sealing_work.lock();
+		sealing_work.queue.push(block);
+		sealing_work.queue.use_last_ref();
+	}
+
 	/// Attempts to perform internal sealing (one that does not require work) and handles the result depending on the type of Seal.
 	fn seal_and_import_block_internally(&self, chain: &MiningBlockChainClient, block: ClosedBlock) -> bool {
 		if !block.transactions().is_empty() || self.forced_sealing() {
@@ -470,11 +477,7 @@ impl Miner {
 				// Save proposal for later seal submission and broadcast it.
 				Seal::Proposal(seal) => {
 					trace!(target: "miner", "Received a Proposal seal.");
-					{
-						let mut sealing_work = self.sealing_work.lock();
-						sealing_work.queue.push(block.clone());
-						sealing_work.queue.use_last_ref();
-					}
+					self.insert_to_sealing_queue(block.clone());
 					block
 						.lock()
 						.seal(&*self.engine, seal)
