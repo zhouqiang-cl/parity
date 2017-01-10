@@ -201,9 +201,13 @@ pub trait Engine : Sync + Send {
 		ethash::is_new_best_block(best_total_difficulty, parent_details, new_header)
 	}
 
-	/// Find out if the block is a proposal block and should not be inserted into the DB.
-	/// Takes a header of a fully verified block.
+	/// If true the block will be inserted into the sealing queue and rebroadcasted.
+	/// If false, it is a regular block which should be inserted into the DB.
+	/// Takes a header verified with all Engine methods.
 	fn is_proposal(&self, _verified_header: &Header) -> bool { false }
+
+	/// Called if the block `is_proposal` and passes final verification.
+	fn submit_proposal(&self, _verified_header: &Header) {}
 
 	/// Register an account which signs consensus messages.
 	fn set_signer(&self, _address: Address, _password: String) {}

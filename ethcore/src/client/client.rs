@@ -452,12 +452,15 @@ impl Client {
 				}
 				if let Ok(open_block) = self.enact_block(&block) {
 					// If its a proposal close (state clone) and insert into the sealing queue. 
-					if self.engine.is_proposal(&block.header) {
+					if self.engine.is_proposal(header) {
 						let closed_block = open_block.close();
 						if self.is_good_block_final(header, closed_block.block().header()) {
 							self.block_queue.mark_as_good(&[header.hash()]);
 							proposed_blocks.push(block.bytes);
+							// Insert into sealing queue for future resealing.
 							self.miner.insert_to_sealing_queue(closed_block);
+							// Inform the Engine that the proposal is fully valid.
+							self.engine.submit_proposal(header);
 							continue;
 						}
 					} else {

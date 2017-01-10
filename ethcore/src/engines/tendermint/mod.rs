@@ -602,22 +602,27 @@ impl Engine for Tendermint {
 	}
 
 	fn is_proposal(&self, header: &Header) -> bool {
-		let signatures_len = header.seal()[2].len();
 		// Signatures have to be an empty list rlp.
-		let proposal = ConsensusMessage::new_proposal(header).expect("block went through full verification; this Engine verifies new_proposal creation; qed");
+		let signatures_len = header.seal()[2].len();
 		if signatures_len != 1 {
 			// New Commit received, skip to next height.
-			trace!(target: "poa", "Received a commit for height {}, round {}.", proposal.height, proposal.round);
-			self.to_next_height(proposal.height);
-			return false;
+			let height = header.number();
+			trace!(target: "poa", "Received a commit for height {}.", height);
+			self.to_next_height(height);
+			false
+		} else {
+			true
 		}
+	}
+
+	fn submit_proposal(&self, header: &Header) {
+		let proposal = ConsensusMessage::new_proposal(header).expect("block went through full verification; this Engine verifies new_proposal creation; qed");
 		let proposer = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
 		debug!(target: "poa", "Received a new proposal for height {}, round {} from {}.", proposal.height, proposal.round, proposer);
 		if self.is_round(&proposal) {
 			*self.proposal.write() = proposal.block_hash.clone();
 		}
 		self.votes.vote(proposal, proposer);
-		true
 	}
 
 	/// Equivalent to a timeout: to be used for tests.
