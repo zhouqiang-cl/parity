@@ -27,7 +27,7 @@ use std::env;
 use super::JournalDB;
 use std::fs::File;
 
-const PROOF_FILENAME: &'static str = "~/Documents/proof_sizes";
+const PROOF_FILENAME: &'static str = "/Users/robert/Documents/proof_sizes";
 
 /// Implementation of the `JournalDB` trait for a disk-backed database with a memory overlay
 /// and, possibly, latent-removal semantics.

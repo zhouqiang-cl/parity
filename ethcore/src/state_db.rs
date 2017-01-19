@@ -22,7 +22,7 @@ use util::hash::{H256};
 use util::hashdb::HashDB;
 use state::Account;
 use header::BlockNumber;
-use util::{Arc, Address, Database, DBTransaction, UtilError, Mutex, Hashable};
+use util::{Arc, Address, Database, DBTransaction, UtilError, Mutex};
 use bloom_journal::{Bloom, BloomJournal};
 use db::COL_ACCOUNT_BLOOM;
 use byteorder::{LittleEndian, ByteOrder};
@@ -165,17 +165,11 @@ impl StateDB {
 		bloom
 	}
 
-	pub fn check_non_null_bloom(&self, address: &Address) -> bool {
-		trace!(target: "account_bloom", "Check account bloom: {:?}", address);
-		let bloom = self.account_bloom.lock();
-		bloom.check(&*address.sha3())
+	pub fn check_non_null_bloom(&self, _address: &Address) -> bool {
+		true
 	}
 
-	pub fn note_non_null_account(&self, address: &Address) {
-		trace!(target: "account_bloom", "Note account bloom: {:?}", address);
-		let mut bloom = self.account_bloom.lock();
-		bloom.set(&*address.sha3());
-	}
+	pub fn note_non_null_account(&self, _address: &Address) {}
 
 	pub fn commit_bloom(batch: &mut DBTransaction, journal: BloomJournal) -> Result<(), UtilError> {
 		assert!(journal.hash_functions <= 255);
@@ -369,89 +363,35 @@ impl StateDB {
 	/// The entry will be propagated to the global cache in `sync_cache`.
 	/// `modified` indicates that the entry was changed since being read from disk or global cache.
 	/// `data` can be set to an existing (`Some`), or non-existing account (`None`).
-	pub fn add_to_account_cache(&mut self, addr: Address, data: Option<Account>, modified: bool) {
-		self.local_cache.push(CacheQueueItem {
-			address: addr,
-			account: data,
-			modified: modified,
-		})
-	}
+	pub fn add_to_account_cache(&mut self, _addr: Address, _data: Option<Account>, _modified: bool) {}
 
 	/// Add a global code cache entry. This doesn't need to worry about canonicality because
 	/// it simply maps hashes to raw code and will always be correct in the absence of
 	/// hash collisions.
-	pub fn cache_code(&self, hash: H256, code: Arc<Vec<u8>>) {
-		let mut cache = self.code_cache.lock();
-
-		cache.insert(hash, code);
-	}
+	pub fn cache_code(&self, _: H256, _: Arc<Vec<u8>>) {}
 
 	/// Get basic copy of the cached account. Does not include storage.
 	/// Returns 'None' if cache is disabled or if the account is not cached.
-	pub fn get_cached_account(&self, addr: &Address) -> Option<Option<Account>> {
-		let mut cache = self.account_cache.lock();
-		if !Self::is_allowed(addr, &self.parent_hash, &cache.modifications) {
-			return None;
-		}
-		cache.accounts.get_mut(addr).map(|a| a.as_ref().map(|a| a.clone_basic()))
+	pub fn get_cached_account(&self, _: &Address) -> Option<Option<Account>> {
+		None
 	}
 
 	/// Get cached code based on hash.
 	#[cfg_attr(feature="dev", allow(map_clone))]
-	pub fn get_cached_code(&self, hash: &H256) -> Option<Arc<Vec<u8>>> {
-		let mut cache = self.code_cache.lock();
-
-		cache.get_mut(hash).map(|code| code.clone())
+	pub fn get_cached_code(&self, _: &H256) -> Option<Arc<Vec<u8>>> {
+		None
 	}
 
 	/// Get value from a cached account.
 	/// Returns 'None' if cache is disabled or if the account is not cached.
-	pub fn get_cached<F, U>(&self, a: &Address, f: F) -> Option<U>
+	pub fn get_cached<F, U>(&self, _: &Address, _: F) -> Option<U>
 		where F: FnOnce(Option<&mut Account>) -> U {
-		let mut cache = self.account_cache.lock();
-		if !Self::is_allowed(a, &self.parent_hash, &cache.modifications) {
-			return None;
-		}
-		cache.accounts.get_mut(a).map(|c| f(c.as_mut()))
+		None
 	}
 
 	/// Query how much memory is set aside for the accounts cache (in bytes).
 	pub fn cache_size(&self) -> usize {
 		self.cache_size
-	}
-
-	/// Check if the account can be returned from cache by matching current block parent hash against canonical
-	/// state and filtering out account modified in later blocks.
-	fn is_allowed(addr: &Address, parent_hash: &Option<H256>, modifications: &VecDeque<BlockChanges>) -> bool {
-		let mut parent = match *parent_hash {
-			None => {
-				trace!("Cache lookup skipped for {:?}: no parent hash", addr);
-				return false;
-			}
-			Some(ref parent) => parent,
-		};
-		if modifications.is_empty() {
-			return true;
-		}
-		// Ignore all accounts modified in later blocks
-		// Modifications contains block ordered by the number
-		// We search for our parent in that list first and then for
-		// all its parent until we hit the canonical block,
-		// checking against all the intermediate modifications.
-		for m in modifications {
-			if &m.hash == parent {
-				if m.is_canon {
-					return true;
-				}
-				parent = &m.parent;
-			}
-			if m.accounts.contains(addr) {
-				trace!("Cache lookup skipped for {:?}: modified in a later block", addr);
-				return false;
-			}
-		}
-		trace!("Cache lookup skipped for {:?}: parent hash is unknown", addr);
-		false
 	}
 }
 

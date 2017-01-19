@@ -328,8 +328,7 @@ impl State {
 	}
 
 	/// Destroy the current object and return root and database.
-	pub fn drop(mut self) -> (H256, StateDB) {
-		self.propagate_to_global_cache();
+	pub fn drop(self) -> (H256, StateDB) {
 		(self.root, self.db)
 	}
 
@@ -404,12 +403,12 @@ impl State {
 			}
 			// check the global cache and and cache storage key there if found,
 			// otherwise cache the account localy and cache storage key there.
-			if let Some(result) = self.db.get_cached(address, |acc| acc.map_or(H256::new(), |a| {
-					let account_db = self.factories.accountdb.readonly(self.db.as_hashdb(), a.address_hash(address));
-					a.storage_at(account_db.as_hashdb(), key)
-				})) {
-				return result;
-			}
+			// if let Some(result) = self.db.get_cached(address, |acc| acc.map_or(H256::new(), |a| {
+			// 		let account_db = self.factories.accountdb.readonly(self.db.as_hashdb(), a.address_hash(address));
+			// 		a.storage_at(account_db.as_hashdb(), key)
+			// 	})) {
+			// 	return result;
+			// }
 			if let Some(ref mut acc) = local_account {
 				if let Some(ref account) = acc.account {
 					let account_db = self.factories.accountdb.readonly(self.db.as_hashdb(), account.address_hash(address));
@@ -421,7 +420,7 @@ impl State {
 		}
 
 		// check bloom before any requests to trie
-		if !self.db.check_non_null_bloom(address) { return H256::zero() }
+		// if !self.db.check_non_null_bloom(address) { return H256::zero() }
 
 		// account is not found in the global cache, get from the DB and insert into local
 		let db = self.factories.trie.readonly(self.db.as_hashdb(), &self.root).expect(SEC_TRIE_DB_UNWRAP_STR);
@@ -569,13 +568,13 @@ impl State {
 	}
 
 	/// Propagate local cache into shared canonical state cache.
-	fn propagate_to_global_cache(&mut self) {
-		let mut addresses = self.cache.borrow_mut();
-		trace!("Committing cache {:?} entries", addresses.len());
-		for (address, a) in addresses.drain().filter(|&(_, ref a)| a.state == AccountState::Committed || a.state == AccountState::CleanFresh) {
-			self.db.add_to_account_cache(address, a.account, a.state == AccountState::Committed);
-		}
-	}
+	//fn propagate_to_global_cache(&mut self) {
+	//	let mut addresses = self.cache.borrow_mut();
+	//	trace!("Committing cache {:?} entries", addresses.len());
+	//	for (address, a) in addresses.drain().filter(|&(_, ref a)| a.state == AccountState::Committed || a.state == AccountState::CleanFresh) {
+	//		// self.db.add_to_account_cache(address, a.account, a.state == AccountState::Committed);
+	//	}
+	//}
 
 	/// Commits our cached account changes into the trie.
 	pub fn commit(&mut self) -> Result<(), Error> {
@@ -663,8 +662,9 @@ impl State {
 	/// Check caches for required data
 	/// First searches for account in the local, then the shared cache.
 	/// Populates local cache if nothing found.
-	fn ensure_cached<F, U>(&self, a: &Address, require: RequireCache, check_bloom: bool, f: F) -> U
+	fn ensure_cached<F, U>(&self, a: &Address, require: RequireCache, _check_bloom: bool, f: F) -> U
 		where F: Fn(Option<&Account>) -> U {
+
 		// check local cache first
 		if let Some(ref mut maybe_acc) = self.cache.borrow_mut().get_mut(a) {
 			if let Some(ref mut account) = maybe_acc.account {
@@ -674,35 +674,33 @@ impl State {
 			}
 			return f(None);
 		}
-		// check global cache
-		let result = self.db.get_cached(a, |mut acc| {
-			if let Some(ref mut account) = acc {
-				let accountdb = self.factories.accountdb.readonly(self.db.as_hashdb(), account.address_hash(a));
-				Self::update_account_cache(require, account, &self.db, accountdb.as_hashdb());
-			}
-			f(acc.map(|a| &*a))
-		});
-		match result {
-			Some(r) => r,
-			None => {
-				// first check bloom if it is not in database for sure
-				if check_bloom && !self.db.check_non_null_bloom(a) { return f(None); }
 
-				// not found in the global cache, get from the DB and insert into local
-				let db = self.factories.trie.readonly(self.db.as_hashdb(), &self.root).expect(SEC_TRIE_DB_UNWRAP_STR);
-				let mut maybe_acc = match db.get_with(a, Account::from_rlp) {
-					Ok(acc) => acc,
-					Err(e) => panic!("Potential DB corruption encountered: {}", e),
-				};
-				if let Some(ref mut account) = maybe_acc.as_mut() {
-					let accountdb = self.factories.accountdb.readonly(self.db.as_hashdb(), account.address_hash(a));
-					Self::update_account_cache(require, account, &self.db, accountdb.as_hashdb());
-				}
-				let r = f(maybe_acc.as_ref());
-				self.insert_cache(a, AccountEntry::new_clean(maybe_acc));
-				r
-			}
+		// check global cache
+		// let result = self.db.get_cached(a, |mut acc| {
+		// 	if let Some(ref mut account) = acc {
+		// 		let accountdb = self.factories.accountdb.readonly(self.db.as_hashdb(), account.address_hash(a));
+		// 		Self::update_account_cache(require, account, &self.db, accountdb.as_hashdb());
+		// 	}
+		// 	f(acc.map(|a| &*a))
+		// });
+		// first check bloom if it is not in database for sure
+		// if check_bloom && !self.db.check_non_null_bloom(a) { return f(None); }
+
+		// not found in the global cache, get from the DB and insert into local
+		let db = self.factories.trie.readonly(self.db.as_hashdb(), &self.root).expect(SEC_TRIE_DB_UNWRAP_STR);
+		let mut maybe_acc = match db.get_with(a, Account::from_rlp) {
+			Ok(acc) => acc,
+			Err(e) => panic!("Potential DB corruption encountered: {}", e),
+		};
+
+		if let Some(ref mut account) = maybe_acc.as_mut() {
+			let accountdb = self.factories.accountdb.readonly(self.db.as_hashdb(), account.address_hash(a));
+			Self::update_account_cache(require, account, &self.db, accountdb.as_hashdb());
 		}
+
+		let r = f(maybe_acc.as_ref());
+		self.insert_cache(a, AccountEntry::new_clean(maybe_acc));
+		r
 	}
 
 	/// Pull account `a` in our cache from the trie DB. `require_code` requires that the code be cached, too.
