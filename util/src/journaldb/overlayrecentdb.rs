@@ -27,8 +27,6 @@ use std::env;
 use super::JournalDB;
 use std::fs::File;
 
-const PROOF_FILENAME: &'static str = "/Users/robert/Documents/proof_sizes";
-
 /// Implementation of the `JournalDB` trait for a disk-backed database with a memory overlay
 /// and, possibly, latent-removal semantics.
 ///
@@ -110,7 +108,9 @@ impl OverlayRecentDB {
 	/// Create a new instance.
 	pub fn new(backing: Arc<Database>, col: Option<u32>) -> OverlayRecentDB {
 		let journal_overlay = Arc::new(RwLock::new(OverlayRecentDB::read_overlay(&backing, col)));
-		let file = File::create(Path::new(PROOF_FILENAME)).expect("Failed to open proofs file");
+		let proof_filename = ::std::env::var("PROOF_FILE").ok().expect("No proof filename given");
+		let file = File::create(Path::new(&proof_filename)).expect("Failed to open proofs file");
+
 		OverlayRecentDB {
 			transaction_overlay: MemoryDB::new(),
 			proof_sizes: Mutex::new(HashMap::new()),
