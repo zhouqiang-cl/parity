@@ -25,6 +25,9 @@ use kvdb::{Database, DBTransaction};
 #[cfg(test)]
 use std::env;
 use super::JournalDB;
+use std::fs::File;
+
+const PROOF_FILENAME: &'static str = "~/Documents/proof_sizes";
 
 /// Implementation of the `JournalDB` trait for a disk-backed database with a memory overlay
 /// and, possibly, latent-removal semantics.
@@ -59,6 +62,8 @@ use super::JournalDB;
 
 pub struct OverlayRecentDB {
 	transaction_overlay: MemoryDB,
+	proof_sizes: Mutex<HashMap<H256, usize>>,
+	proof_file: Arc<File>,
 	backing: Arc<Database>,
 	journal_overlay: Arc<RwLock<JournalOverlay>>,
 	column: Option<u32>,
@@ -90,6 +95,8 @@ impl Clone for OverlayRecentDB {
 	fn clone(&self) -> OverlayRecentDB {
 		OverlayRecentDB {
 			transaction_overlay: self.transaction_overlay.clone(),
+			proof_sizes: Mutex::new(HashMap::new()),
+			proof_file: self.proof_file.clone(),
 			backing: self.backing.clone(),
 			journal_overlay: self.journal_overlay.clone(),
 			column: self.column.clone(),
@@ -103,8 +110,11 @@ impl OverlayRecentDB {
 	/// Create a new instance.
 	pub fn new(backing: Arc<Database>, col: Option<u32>) -> OverlayRecentDB {
 		let journal_overlay = Arc::new(RwLock::new(OverlayRecentDB::read_overlay(&backing, col)));
+		let file = File::create(Path::new(PROOF_FILENAME)).expect("Failed to open proofs file");
 		OverlayRecentDB {
 			transaction_overlay: MemoryDB::new(),
+			proof_sizes: Mutex::new(HashMap::new()),
+			proof_file: Arc::new(file),
 			backing: backing,
 			journal_overlay: journal_overlay,
 			column: col,
@@ -234,6 +244,8 @@ impl JournalDB for OverlayRecentDB {
 	}
 
 	fn journal_under(&mut self, batch: &mut DBTransaction, now: u64, id: &H256) -> Result<u32, UtilError> {
+		use std::io::Write;
+
 		trace!(target: "journaldb", "entry: #{} ({})", now, id);
 
 		let mut journal_overlay = self.journal_overlay.write();
@@ -243,6 +255,14 @@ impl JournalDB for OverlayRecentDB {
 
 		let mut r = RlpStream::new_list(3);
 		let mut tx = self.transaction_overlay.drain();
+
+		{
+			let mut proof_sizes = self.proof_sizes.lock();
+			let proof_size: usize = proof_sizes.drain().map(|(_, v)| v).sum();
+			let mut proof_file = &*self.proof_file;
+			writeln!(&mut proof_file, "{}: {}", now, proof_size).expect("failed to write to proof file");
+		};
+
 		let inserted_keys: Vec<_> = tx.iter().filter_map(|(k, &(_, c))| if c > 0 { Some(k.clone()) } else { None }).collect();
 		let removed_keys: Vec<_> = tx.iter().filter_map(|(k, &(_, c))| if c < 0 { Some(k.clone()) } else { None }).collect();
 		let ops = inserted_keys.len() + removed_keys.len();
@@ -397,7 +417,14 @@ impl HashDB for OverlayRecentDB {
 			journal_overlay.backing_overlay.get(&key)
 				.or_else(|| journal_overlay.pending_overlay.get(&key).cloned())
 		};
-		v.or_else(|| self.payload(key))
+		let v = v.or_else(|| self.payload(key));
+
+		if let Some(ref val) = v {
+			let real_key = val.sha3();
+			self.proof_sizes.lock().entry(real_key).or_insert(val.len());
+		}
+
+		v
 	}
 
 	fn contains(&self, key: &H256) -> bool {
