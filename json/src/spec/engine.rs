@@ -16,7 +16,7 @@
 
 //! Engine deserialization.
 
-use super::{Ethash, BasicAuthority, AuthorityRound, Tendermint};
+use super::{Ethash, BasicAuthority, AuthorityRound, Tendermint, Abab};
 
 /// Engine deserialization.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -37,7 +37,10 @@ pub enum Engine {
 	AuthorityRound(AuthorityRound),
 	/// Tendermint engine.
 	#[serde(rename="tendermint")]
-	Tendermint(Tendermint)
+	Tendermint(Tendermint),
+	/// Abab engine.
+	#[serde(rename="abab")]
+	Abab(Abab),
 }
 
 #[cfg(test)]

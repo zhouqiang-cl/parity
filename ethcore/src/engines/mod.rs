@@ -23,6 +23,7 @@ mod instant_seal;
 mod basic_authority;
 mod authority_round;
 mod tendermint;
+mod abab;
 mod validator_set;
 mod signer;
 
@@ -31,6 +32,7 @@ pub use self::instant_seal::InstantSeal;
 pub use self::basic_authority::BasicAuthority;
 pub use self::authority_round::AuthorityRound;
 pub use self::tendermint::Tendermint;
+pub use self::abab::Abab;
 
 use std::sync::Weak;
 use util::*;
