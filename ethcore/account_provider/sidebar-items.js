@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["SignError","Signing error"]],"struct":[["AccountProvider","Account management. Responsible for unlocking accounts."],["DappId","Dapp identifier"],["Signature",""]],"type":[["Error","`AccountProvider` errors."]]});
