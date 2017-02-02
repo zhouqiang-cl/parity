@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -517,13 +517,13 @@ impl Host {
 	}
 
 	pub fn external_url(&self) -> Option<String> {
-		self.info.read().public_endpoint.as_ref().map(|e| format!("{}", Node::new(self.info.read().id().clone(), e.clone())))
+		let info = self.info.read();
+		info.public_endpoint.as_ref().map(|e| format!("{}", Node::new(info.id().clone(), e.clone())))
 	}
 
 	pub fn local_url(&self) -> String {
-		let r = format!("{}", Node::new(self.info.read().id().clone(), self.info.read().local_endpoint.clone()));
-		println!("{}", r);
-		r
+		let info = self.info.read();
+		format!("{}", Node::new(info.id().clone(), info.local_endpoint.clone()))
 	}
 
 	pub fn stop(&self, io: &IoContext<NetworkIoMessage>) -> Result<(), NetworkError> {

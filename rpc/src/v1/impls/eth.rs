@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -25,12 +25,12 @@ use std::sync::{Arc, Weak};
 use futures::{self, BoxFuture, Future};
 use rlp::{self, UntrustedRlp, View};
 use time::get_time;
-use util::{H256, Address, FixedHash, U256, H64, Uint};
+use util::{H160, H256, Address, FixedHash, U256, H64, Uint};
 use util::sha3::Hashable;
 use util::{FromHex, Mutex};
 
 use ethash::SeedHashCompute;
-use ethcore::account_provider::AccountProvider;
+use ethcore::account_provider::{AccountProvider, DappId};
 use ethcore::block::IsBlock;
 use ethcore::client::{MiningBlockChainClient, BlockId, TransactionId, UncleId};
 use ethcore::ethereum::Ethash;
@@ -45,15 +45,15 @@ use ethsync::{SyncProvider};
 use jsonrpc_core::Error;
 use jsonrpc_macros::Trailing;
 
+use v1::helpers::{CallRequest as CRequest, errors, limit_logs};
+use v1::helpers::dispatch::{dispatch_transaction, default_gas_price};
+use v1::helpers::block_import::is_major_importing;
 use v1::traits::Eth;
 use v1::types::{
 	RichBlock, Block, BlockTransactions, BlockNumber, Bytes, SyncStatus, SyncInfo,
 	Transaction, CallRequest, Index, Filter, Log, Receipt, Work,
 	H64 as RpcH64, H256 as RpcH256, H160 as RpcH160, U256 as RpcU256,
 };
-use v1::helpers::{CallRequest as CRequest, errors, limit_logs};
-use v1::helpers::dispatch::{dispatch_transaction, default_gas_price};
-use v1::helpers::block_import::is_major_importing;
 use v1::metadata::Metadata;
 
 const EXTRA_INFO_PROOF: &'static str = "Object exists in in blockchain (fetched earlier), extra_info is always available if object exists; qed";
@@ -145,7 +145,7 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> EthClient<C, SN, S, M, EM> where
 						timestamp: view.timestamp().into(),
 						difficulty: view.difficulty().into(),
 						total_difficulty: total_difficulty.into(),
-						seal_fields: view.seal().into_iter().map(|f| rlp::decode(&f)).map(Bytes::new).collect(),
+						seal_fields: view.seal().into_iter().map(Into::into).collect(),
 						uncles: block.uncle_hashes().into_iter().map(Into::into).collect(),
 						transactions: match include_txs {
 							true => BlockTransactions::Full(block.view().localized_transactions().into_iter().map(Into::into).collect()),
@@ -197,7 +197,7 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> EthClient<C, SN, S, M, EM> where
 				total_difficulty: (uncle.difficulty().clone() + parent_difficulty).into(),
 				receipts_root: uncle.receipts_root().clone().into(),
 				extra_data: uncle.extra_data().clone().into(),
-				seal_fields: uncle.seal().clone().into_iter().map(|f| rlp::decode(&f)).map(Bytes::new).collect(),
+				seal_fields: uncle.seal().into_iter().cloned().map(Into::into).collect(),
 				uncles: vec![],
 				transactions: BlockTransactions::Hashes(vec![]),
 			},
@@ -217,6 +217,14 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> EthClient<C, SN, S, M, EM> where
 			value: request.value.unwrap_or_else(U256::zero),
 			data: request.data.map_or_else(Vec::new, |d| d.to_vec())
 		}.fake_sign(from))
+	}
+
+	fn dapp_accounts(&self, dapp: DappId) -> Result<Vec<H160>, Error> {
+		let store = take_weak!(self.accounts);
+		store
+			.note_dapp_used(dapp.clone())
+			.and_then(|_| store.dapps_addresses(dapp))
+			.map_err(|e| errors::internal("Could not fetch accounts.", e))
 	}
 }
 
@@ -319,10 +327,24 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> Eth for EthClient<C, SN, S, M, EM> where
 		}
 	}
 
-	fn author(&self) -> Result<RpcH160, Error> {
-		self.active()?;
+	fn author(&self, meta: Metadata) -> BoxFuture<RpcH160, Error> {
+		let dapp = meta.dapp_id.unwrap_or_default();
 
-		Ok(RpcH160::from(take_weak!(self.miner).author()))
+		let author = move || {
+			self.active()?;
+
+			let mut miner = take_weak!(self.miner).author();
+			if miner == 0.into() {
+				let accounts = self.dapp_accounts(dapp.into())?;
+				if let Some(address) = accounts.get(0) {
+					miner = *address;
+				}
+			}
+
+			Ok(RpcH160::from(miner))
+		};
+
+		futures::done(author()).boxed()
 	}
 
 	fn is_mining(&self) -> Result<bool, Error> {
@@ -350,11 +372,7 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> Eth for EthClient<C, SN, S, M, EM> where
 		let accounts = move || {
 			self.active()?;
 
-			let store = take_weak!(self.accounts);
-			let accounts = store
-				.note_dapp_used(dapp.clone().into())
-				.and_then(|_| store.dapps_addresses(dapp.into()))
-				.map_err(|e| errors::internal("Could not fetch accounts.", e))?;
+			let accounts = self.dapp_accounts(dapp.into())?;
 			Ok(accounts.into_iter().map(Into::into).collect())
 		};
 

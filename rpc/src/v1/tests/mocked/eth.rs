@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -327,7 +327,12 @@ fn rpc_eth_author() {
 		"id": 1
 	}"#;
 
+	// No accounts - returns zero
 	assert_eq!(tester.io.handle_request_sync(req), Some(make_res(Address::zero())));
+
+	// Account set - return first account
+	let addr = tester.accounts_provider.new_account("123").unwrap();
+	assert_eq!(tester.io.handle_request_sync(req), Some(make_res(addr)));
 
 	for i in 0..20 {
 		let addr = tester.accounts_provider.new_account(&format!("{}", i)).unwrap();
@@ -969,7 +974,7 @@ fn rpc_eth_transaction_receipt() {
 			log_index: 1,
 		}],
 		log_bloom: 0.into(),
-		state_root: 0.into(),
+		state_root: Some(0.into()),
 	};
 
 	let hash = H256::from_str("b903239f8543d04b5dc1ba6579132b143087c68db1b2168786408fcbce568238").unwrap();

@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Ethcore (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -34,7 +34,7 @@ use header::Header;
 use builtin::Builtin;
 use env_info::EnvInfo;
 use rlp::{UntrustedRlp, View as RlpView};
-use ethkey::{recover, public_to_address};
+use ethkey::{recover, public_to_address, Signature};
 use account_provider::AccountProvider;
 use block::*;
 use spec::CommonParams;
@@ -283,11 +283,15 @@ impl Tendermint {
 	}
 
 	fn is_height(&self, message: &ConsensusMessage) -> bool {
-		message.vote_step.is_height(self.height.load(AtomicOrdering::SeqCst)) 
+		message.vote_step.is_height(self.height.load(AtomicOrdering::SeqCst))
 	}
 
 	fn is_view(&self, message: &ConsensusMessage) -> bool {
+<<<<<<< HEAD
 		message.vote_step.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) 
+=======
+		message.vote_step.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))
+>>>>>>> master
 	}
 
 	fn increment_view(&self, n: View) {
@@ -309,7 +313,11 @@ impl Tendermint {
 	fn has_enough_future_step_votes(&self, vote_step: &VoteStep) -> bool {
 		if vote_step.view > self.view.load(AtomicOrdering::SeqCst) {
 			let step_votes = self.votes.count_round_votes(vote_step);
+<<<<<<< HEAD
 			self.is_above_threshold(step_votes)	
+=======
+			self.is_above_threshold(step_votes)
+>>>>>>> master
 		} else {
 			false
 		}
@@ -395,7 +403,7 @@ impl Engine for Tendermint {
 	}
 
 	fn populate_from_parent(&self, header: &mut Header, parent: &Header, gas_floor_target: U256, _gas_ceil_target: U256) {
-		// Chain scoring: total weight is sqrt(U256::max_value())*height - round
+		// Chain scoring: total weight is sqrt(U256::max_value())*height - view
 		let new_difficulty = U256::from(U128::max_value()) + consensus_view(parent).expect("Header has been verified; qed").into() - self.view.load(AtomicOrdering::SeqCst).into();
 		header.set_difficulty(new_difficulty);
 		header.set_gas_limit({
@@ -452,11 +460,12 @@ impl Engine for Tendermint {
 			if !self.is_authority(&sender) {
 				Err(EngineError::NotAuthorized(sender))?;
 			}
+			self.broadcast_message(rlp.as_raw().to_vec());
 			if self.votes.vote(message.clone(), &sender).is_some() {
+				self.validators.report_malicious(&sender);
 				Err(EngineError::DoubleVote(sender))?
 			}
 			trace!(target: "poa", "Handling a valid {:?} from {}.", message, sender);
-			self.broadcast_message(rlp.as_raw().to_vec());
 			self.handle_valid_message(&message);
 		}
 		Ok(())
@@ -548,6 +557,7 @@ impl Engine for Tendermint {
 		let min_gas = parent.gas_limit().clone() - parent.gas_limit().clone() / gas_limit_divisor;
 		let max_gas = parent.gas_limit().clone() + parent.gas_limit().clone() / gas_limit_divisor;
 		if header.gas_limit() <= &min_gas || header.gas_limit() >= &max_gas {
+			self.validators.report_malicious(header.author());
 			Err(BlockError::InvalidGasLimit(OutOfBounds { min: Some(min_gas), max: Some(max_gas), found: header.gas_limit().clone() }))?;
 		}
 
@@ -559,6 +569,10 @@ impl Engine for Tendermint {
 			self.signer.set(ap, address, password);
 		}
 		self.to_step(Step::Propose);
+	}
+
+	fn sign(&self, hash: H256) -> Result<Signature, Error> {
+		self.signer.sign(hash).map_err(Into::into)
 	}
 
 	fn stop(&self) {
@@ -589,6 +603,11 @@ impl Engine for Tendermint {
 		let next_step = match *self.step.read() {
 			Step::Propose => {
 				trace!(target: "poa", "Propose timeout.");
+				if self.proposal.read().is_none() {
+					// Report the proposer if no proposal was received.
+					let current_proposer = self.view_proposer(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst));
+					self.validators.report_benign(&current_proposer);
+				}
 				Step::Prevote
 			},
 			Step::Prevote if self.has_enough_any_votes() => {
@@ -620,7 +639,7 @@ impl Engine for Tendermint {
 
 	fn register_client(&self, client: Weak<Client>) {
 		*self.client.write() = Some(client.clone());
-		self.validators.register_call_contract(client);
+		self.validators.register_contract(client);
 	}
 }
 
@@ -662,7 +681,7 @@ mod tests {
 		}
 	}
 
-	fn vote<F>(engine: &Engine, signer: F, height: usize, view: usize, step: Step, block_hash: Option<H256>) -> Bytes where F: FnOnce(H256) -> Result<H520, ::account_provider::Error> {
+	fn vote<F>(engine: &Engine, signer: F, height: usize, view: usize, step: Step, block_hash: Option<H256>) -> Bytes where F: FnOnce(H256) -> Result<H520, ::account_provider::SignError> {
 		let mi = message_info_rlp(&VoteStep::new(height, view, step), block_hash);
 		let m = message_full_rlp(&signer(mi.sha3()).unwrap().into(), &mi);
 		engine.handle_message(&m).unwrap();

@@ -1,7 +1,7 @@
 # [Parity](https://ethcore.io/parity.html)
 ### Fast, light, and robust Ethereum implementation
 
-[![Build Status][travis-image]][travis-url] [![build status](https://gitlab.ethcore.io/Mirrors/ethcore-parity/badges/master/build.svg)](https://gitlab.ethcore.io/Mirrors/ethcore-parity/commits/master) [![Coverage Status][coveralls-image]][coveralls-url]  [![GPLv3][license-image]][license-url]
+[![build status](https://gitlab.ethcore.io/parity/parity/badges/master/build.svg)](https://gitlab.ethcore.io/parity/parity/commits/master) [![Coverage Status][coveralls-image]][coveralls-url]  [![GPLv3][license-image]][license-url]
 
 ### Join the chat!
 
@@ -13,8 +13,6 @@ parity.js [![Join the chat at https://gitter.im/ethcore/parity.js](https://badge
 
 Be sure to check out [our wiki][wiki-url] for more information.
 
-[travis-image]: https://travis-ci.org/ethcore/parity.svg?branch=master
-[travis-url]: https://travis-ci.org/ethcore/parity
 [coveralls-image]: https://coveralls.io/repos/github/ethcore/parity/badge.svg?branch=master
 [coveralls-url]: https://coveralls.io/github/ethcore/parity?branch=master
 [gitter-image]: https://badges.gitter.im/Join%20Chat.svg
@@ -24,7 +22,7 @@ Be sure to check out [our wiki][wiki-url] for more information.
 [doc-url]: https://ethcore.github.io/parity/ethcore/index.html
 [wiki-url]: https://github.com/ethcore/parity/wiki
 
-**Parity requires Rust version 1.13.0 to build**
+**Parity requires Rust version 1.14.0 to build**
 
 ----
 
@@ -128,4 +126,4 @@ systemd user directory (usually `~/.config/systemd/user`).
 2. To pass any argument to Parity, write a `~/.parity/parity.conf` file this way:
 `ARGS="ARG1 ARG2 ARG3"`.
 
-	Example: `ARGS="ui --geth --identity MyMachine"`.
+	Example: `ARGS="ui --identity MyMachine"`.

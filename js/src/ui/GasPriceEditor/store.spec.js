@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -59,6 +59,31 @@ describe('ui/GasPriceEditor/store', () => {
 
     it('sets the gasLimit as passed', () => {
       expect(store.gasLimit).to.equal(GASLIMIT);
+    });
+  });
+
+  describe('constructor (defaults) when histogram not available', () => {
+    const api = {
+      eth: {
+        gasPrice: sinon.stub().resolves(GASPRICE)
+      },
+      parity: {
+        gasPriceHistogram: sinon.stub().rejects('Data not available')
+      }
+    };
+
+    beforeEach(() => {
+      store = new Store(api, { gasLimit: GASLIMIT });
+    });
+
+    it('retrieves the histogram and gasPrice', done => {
+      expect(api.eth.gasPrice).to.have.been.called;
+      expect(api.parity.gasPriceHistogram).to.have.been.called;
+
+      setImmediate(() => {
+        expect(store.histogram).not.to.be.null;
+        done();
+      });
     });
   });
 

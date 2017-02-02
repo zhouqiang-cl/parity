@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -25,10 +25,10 @@ use ethcore::transaction::{SignedTransaction, PendingTransaction};
 use ethcore::miner::MinerService;
 
 use jsonrpc_core::Error;
-use v1::traits::Signer;
-use v1::types::{TransactionModification, ConfirmationRequest, ConfirmationResponse, ConfirmationResponseWithToken, U256, Bytes};
 use v1::helpers::{errors, SignerService, SigningQueue, ConfirmationPayload};
 use v1::helpers::dispatch::{self, dispatch_transaction, WithToken};
+use v1::traits::Signer;
+use v1::types::{TransactionModification, ConfirmationRequest, ConfirmationResponse, ConfirmationResponseWithToken, U256, Bytes};
 
 /// Transactions confirmation (personal) rpc implementation.
 pub struct SignerClient<C, M> where C: MiningBlockChainClient, M: MinerService {
@@ -76,6 +76,11 @@ impl<C: 'static, M: 'static> SignerClient<C, M> where C: MiningBlockChainClient,
 			let mut payload = confirmation.payload.clone();
 			// Modify payload
 			if let ConfirmationPayload::SendTransaction(ref mut request) = payload {
+				if let Some(sender) = modification.sender.clone() {
+					request.from = sender.into();
+					// Altering sender should always reset the nonce.
+					request.nonce = None;
+				}
 				if let Some(gas_price) = modification.gas_price {
 					request.gas_price = gas_price.into();
 				}

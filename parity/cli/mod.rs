@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -184,6 +184,7 @@ usage! {
 			or |c: &Config| otry!(c.dapps).user.clone().map(Some),
 		flag_dapps_pass: Option<String> = None,
 			or |c: &Config| otry!(c.dapps).pass.clone().map(Some),
+		flag_dapps_apis_all: bool = false, or |_| None,
 
 		// -- Sealing/Mining Options
 		flag_author: Option<String> = None,
@@ -232,6 +233,15 @@ usage! {
 			or |c: &Config| otry!(c.mining).notify_work.clone().map(|vec| Some(vec.join(","))),
 		flag_refuse_service_transactions: bool = false,
 			or |c: &Config| otry!(c.mining).refuse_service_transactions.clone(),
+
+		flag_stratum: bool = false,
+			or |c: &Config| Some(c.stratum.is_some()),
+		flag_stratum_interface: String = "local",
+			or |c: &Config| otry!(c.stratum).interface.clone(),
+		flag_stratum_port: u16 = 8008u16,
+			or |c: &Config| otry!(c.stratum).port.clone(),
+		flag_stratum_secret: Option<String> = None,
+			or |c: &Config| otry!(c.stratum).secret.clone().map(Some),
 
 		// -- Footprint Options
 		flag_tracing: String = "auto",
@@ -313,6 +323,7 @@ struct Config {
 	snapshots: Option<Snapshots>,
 	vm: Option<VM>,
 	misc: Option<Misc>,
+	stratum: Option<Stratum>,
 }
 
 #[derive(Default, Debug, PartialEq, RustcDecodable)]
@@ -419,6 +430,13 @@ struct Mining {
 	remove_solved: Option<bool>,
 	notify_work: Option<Vec<String>>,
 	refuse_service_transactions: Option<bool>,
+}
+
+#[derive(Default, Debug, PartialEq, RustcDecodable)]
+struct Stratum {
+	interface: Option<String>,
+	port: Option<u16>,
+	secret: Option<String>,
 }
 
 #[derive(Default, Debug, PartialEq, RustcDecodable)]
@@ -612,6 +630,7 @@ mod tests {
 			flag_dapps_path: "$HOME/.parity/dapps".into(),
 			flag_dapps_user: Some("test_user".into()),
 			flag_dapps_pass: Some("test_pass".into()),
+			flag_dapps_apis_all: false,
 
 			// -- Sealing/Mining Options
 			flag_author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
@@ -637,6 +656,11 @@ mod tests {
 			flag_remove_solved: false,
 			flag_notify_work: Some("http://localhost:3001".into()),
 			flag_refuse_service_transactions: false,
+
+			flag_stratum: false,
+			flag_stratum_interface: "local".to_owned(),
+			flag_stratum_port: 8008u16,
+			flag_stratum_secret: None,
 
 			// -- Footprint Options
 			flag_tracing: "auto".into(),
@@ -843,7 +867,8 @@ mod tests {
 				logging: Some("own_tx=trace".into()),
 				log_file: Some("/var/log/parity.log".into()),
 				color: Some(true),
-			})
+			}),
+			stratum: None,
 		});
 	}
 }

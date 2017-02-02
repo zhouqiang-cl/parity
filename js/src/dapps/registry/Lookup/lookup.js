@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -69,7 +69,7 @@ class Lookup extends Component {
             <MenuItem value='IMG' primaryText='IMG – hash of a picture in the blockchain' />
             <MenuItem value='CONTENT' primaryText='CONTENT – hash of a data in the blockchain' />
             <MenuItem value='reverse' primaryText='reverse – find a name for an address' />
-            <MenuItem value='owner' primaryText='owner – find a the owner' />
+            <MenuItem value='owner' primaryText='owner – find the owner' />
           </DropDownMenu>
           <RaisedButton
             label='Lookup'

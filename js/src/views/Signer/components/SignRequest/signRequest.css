@@ -1,4 +1,4 @@
-/* Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+/* Copyright 2015-2017 Parity Technologies (UK) Ltd.
 /* This file is part of Parity.
 /*
 /* Parity is free software: you can redistribute it and/or modify
@@ -27,8 +27,20 @@
   min-height: $pendingHeight;
 }
 
+.signData {
+    border: 0.25em solid red;
+    padding: 0.5em;
+    margin-left: -2em;
+    overflow: auto;
+    max-height: 6em;
+}
+
+.signData > p {
+    color: white;
+}
+
 .signDetails {
-  flex: 1;
+  flex: 10;
 }
 
 .address, .info {

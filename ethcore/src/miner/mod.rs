@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -49,13 +49,17 @@ mod price_info;
 mod service_transaction_checker;
 mod transaction_queue;
 mod work_notify;
+mod stratum;
 
 pub use self::external::{ExternalMiner, ExternalMinerService};
+
 pub use self::miner::{Miner, MinerOptions, Banning, PendingSet, GasPricer, GasPriceCalibratorOptions, GasLimit};
 pub use self::transaction_queue::{TransactionQueue, TransactionDetailsProvider as TransactionQueueDetailsProvider,
 	PrioritizationStrategy, AccountDetails, TransactionOrigin};
 pub use self::local_transactions::{Status as LocalTransactionStatus};
 pub use client::TransactionImportResult;
+pub use self::work_notify::NotifyWork;
+pub use self::stratum::{Stratum, Error as StratumError, Options as StratumOptions};
 
 use std::collections::BTreeMap;
 use util::{H256, U256, Address, Bytes};
@@ -79,7 +83,7 @@ pub trait MinerService : Send + Sync {
 	fn set_author(&self, author: Address);
 
 	/// Set info necessary to sign consensus messages.
-	fn set_engine_signer(&self, address: Address, password: String) -> Result<(), ::account_provider::Error>;
+	fn set_engine_signer(&self, address: Address, password: String) -> Result<(), ::account_provider::SignError>;
 
 	/// Get the extra_data that we will seal blocks with.
 	fn extra_data(&self) -> Bytes;

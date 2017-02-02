@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -74,13 +74,13 @@ build_rpc_trait! {
 
 		/// Start the network.
 		///
-		/// Deprecated. Use `set_mode("active")` instead.
+		/// @deprecated - Use `set_mode("active")` instead.
 		#[rpc(name = "parity_startNetwork")]
 		fn start_network(&self) -> Result<bool, Error>;
 
 		/// Stop the network.
 		///
-		/// Deprecated. Use `set_mode("offline")` instead.
+		/// @deprecated - Use `set_mode("offline")` instead.
 		#[rpc(name = "parity_stopNetwork")]
 		fn stop_network(&self) -> Result<bool, Error>;
 

@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -42,8 +42,8 @@ build_rpc_trait! {
 		fn hashrate(&self) -> Result<U256, Error>;
 
 		/// Returns block author.
-		#[rpc(name = "eth_coinbase")]
-		fn author(&self) -> Result<H160, Error>;
+		#[rpc(meta, name = "eth_coinbase")]
+		fn author(&self, Self::Metadata) -> BoxFuture<H160, Error>;
 
 		/// Returns true if client is actively mining new blocks.
 		#[rpc(name = "eth_mining")]
@@ -105,7 +105,7 @@ build_rpc_trait! {
 		#[rpc(name = "eth_sendRawTransaction")]
 		fn send_raw_transaction(&self, Bytes) -> Result<H256, Error>;
 
-		/// Alias of `eth_sendRawTransaction`.
+		/// @alias of `eth_sendRawTransaction`.
 		#[rpc(name = "eth_submitTransaction")]
 		fn submit_transaction(&self, Bytes) -> Result<H256, Error>;
 

@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -30,10 +30,19 @@ export default class Personal {
     this._started = true;
 
     return Promise.all([
+      this._defaultAccount(),
       this._listAccounts(),
       this._accountsInfo(),
       this._loggingSubscribe()
     ]);
+  }
+
+  _defaultAccount = () => {
+    return this._api.parity
+      .defaultAccount()
+      .then((defaultAccount) => {
+        this._updateSubscriptions('parity_defaultAccount', null, defaultAccount);
+      });
   }
 
   _listAccounts = () => {
@@ -45,10 +54,14 @@ export default class Personal {
   }
 
   _accountsInfo = () => {
-    return this._api.parity
-      .allAccountsInfo()
-      .then((info) => {
-        this._updateSubscriptions('parity_allAccountsInfo', null, info);
+    return Promise
+      .all([
+        this._api.parity.accountsInfo(),
+        this._api.parity.allAccountsInfo()
+      ])
+      .then(([info, allInfo]) => {
+        this._updateSubscriptions('parity_accountsInfo', null, info);
+        this._updateSubscriptions('parity_allAccountsInfo', null, allInfo);
       });
   }
 
@@ -72,6 +85,11 @@ export default class Personal {
         case 'parity_setAccountName':
         case 'parity_setAccountMeta':
           this._accountsInfo();
+          return;
+
+        case 'parity_setDappsAddresses':
+        case 'parity_setNewDappsWhitelist':
+          this._defaultAccount();
           return;
       }
     });

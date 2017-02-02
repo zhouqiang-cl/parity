@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -24,9 +24,14 @@ pub enum Error {
 	Io(IoError),
 	InvalidPassword,
 	InvalidSecret,
+	InvalidCryptoMeta,
 	InvalidAccount,
 	InvalidMessage,
 	InvalidKeyFile(String),
+	VaultsAreNotSupported,
+	UnsupportedVault,
+	InvalidVaultName,
+	VaultNotFound,
 	CreationFailed,
 	EthKey(EthKeyError),
 	EthCrypto(EthCryptoError),
@@ -39,9 +44,14 @@ impl fmt::Display for Error {
 			Error::Io(ref err) => err.to_string(),
 			Error::InvalidPassword => "Invalid password".into(),
 			Error::InvalidSecret => "Invalid secret".into(),
+			Error::InvalidCryptoMeta => "Invalid crypted metadata".into(),
 			Error::InvalidAccount => "Invalid account".into(),
 			Error::InvalidMessage => "Invalid message".into(),
 			Error::InvalidKeyFile(ref reason) => format!("Invalid key file: {}", reason),
+			Error::VaultsAreNotSupported => "Vaults are not supported".into(),
+			Error::UnsupportedVault => "Vault is not supported for this operation".into(),
+			Error::InvalidVaultName => "Invalid vault name".into(),
+			Error::VaultNotFound => "Vault not found".into(),
 			Error::CreationFailed => "Account creation failed".into(),
 			Error::EthKey(ref err) => err.to_string(),
 			Error::EthCrypto(ref err) => err.to_string(),

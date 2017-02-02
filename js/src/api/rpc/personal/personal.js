@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -34,9 +34,9 @@ export default class Personal {
       .then(outAddress);
   }
 
-  signAndSendTransaction (options, password) {
+  sendTransaction (options, password) {
     return this._transport
-      .execute('personal_signAndSendTransaction', inOptions(options), password);
+      .execute('personal_sendTransaction', inOptions(options), password);
   }
 
   unlockAccount (account, password, duration = 1) {

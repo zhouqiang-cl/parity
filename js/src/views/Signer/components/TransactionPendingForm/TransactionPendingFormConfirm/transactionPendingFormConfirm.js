@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -150,7 +150,7 @@ class TransactionPendingFormConfirm extends Component {
               label={
                 isSending
                   ? 'Confirming...'
-                  : 'Confirm Transaction'
+                  : 'Confirm Request'
               }
               onTouchTap={ this.onConfirm }
               primary
@@ -256,7 +256,8 @@ function mapStateToProps (_, initProps) {
 
   return (state) => {
     const { accounts } = state.personal;
-    const account = accounts[address] || {};
+    let gotAddress = Object.keys(accounts).find(a => a.toLowerCase() === address.toLowerCase());
+    const account = gotAddress ? accounts[gotAddress] : {};
 
     return { account };
   };

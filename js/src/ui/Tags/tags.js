@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -28,14 +28,21 @@ export default class Tags extends Component {
   }
 
   render () {
-    return (<div className={ styles.tags }>
-      { this.renderTags() }
-    </div>);
+    const { tags } = this.props;
+
+    if (!tags || tags.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className={ styles.tags }>
+        { this.renderTags() }
+      </div>
+    );
   }
 
   renderTags () {
-    const { handleAddSearchToken, setRefs } = this.props;
-    const tags = this.props.tags || [];
+    const { handleAddSearchToken, setRefs, tags } = this.props;
 
     const tagClasses = handleAddSearchToken
       ? [ styles.tag, styles.tagClickable ]
@@ -47,14 +54,14 @@ export default class Tags extends Component {
 
     return tags
       .sort()
-      .map((tag, idx) => {
+      .map((tag, index) => {
         const onClick = handleAddSearchToken
           ? () => handleAddSearchToken(tag)
           : null;
 
         return (
           <div
-            key={ idx }
+            key={ `tag_${index}` }
             className={ tagClasses.join(' ') }
             onClick={ onClick }
             ref={ setRef }

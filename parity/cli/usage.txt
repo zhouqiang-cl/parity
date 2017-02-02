@@ -1,6 +1,6 @@
 Parity. Ethereum Client.
   By Wood/Paronyan/Kotewicz/Drwięga/Volf et al.
-  Copyright 2015, 2016 Ethcore (UK) Limited
+  Copyright 2015, 2016, 2017 Parity Technologies (UK) Ltd
 
 Usage:
   parity [options]
@@ -171,6 +171,9 @@ API and Console Options:
                                  conjunction with --dapps-user. (default: {flag_dapps_pass:?})
   --dapps-path PATH              Specify directory where dapps should be installed.
                                  (default: {flag_dapps_path})
+  --dapps-apis-all               Expose all possible RPC APIs on Dapps port.
+                                 WARNING: INSECURE. Used only for development.
+                                 (default: {flag_dapps_apis_all})
 
 Sealing/Mining Options:
   --author ADDRESS               Specify the block author (aka "coinbase") address
@@ -260,6 +263,11 @@ Sealing/Mining Options:
                                  (default: {flag_notify_work:?})
   --refuse-service-transactions  Always refuse service transactions.
                                  (default: {flag_refuse_service_transactions}).
+  --stratum                      Run Stratum server for miner push notification. (default: {flag_stratum})
+  --stratum-interface IP         Interface address for Stratum server. (default: {flag_stratum_interface})
+  --stratum-port PORT            Port for Stratum server to listen on. (default: {flag_stratum_port})
+  --stratum-secret STRING        Secret for authorizing Stratum server for peers.
+                                 (default: {flag_stratum_secret:?})
 
 Footprint Options:
   --tracing BOOL                 Indicates if full transaction tracing should be

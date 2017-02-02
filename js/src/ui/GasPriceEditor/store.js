@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -124,7 +124,12 @@ export default class GasPriceEditor {
   @action loadDefaults () {
     Promise
       .all([
-        this._api.parity.gasPriceHistogram(),
+        // NOTE fetching histogram may fail if there is not enough data.
+        // We fallback to empty histogram.
+        this._api.parity.gasPriceHistogram().catch(() => ({
+          bucket_bounds: [],
+          counts: []
+        })),
         this._api.eth.gasPrice()
       ])
       .then(([histogram, _price]) => {

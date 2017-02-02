@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ macro_rules! rpc_unimplemented {
 use std::fmt;
 use rlp::DecoderError;
 use ethcore::error::{Error as EthcoreError, CallError, TransactionError};
-use ethcore::account_provider::{Error as AccountError};
+use ethcore::account_provider::{SignError as AccountError};
 use jsonrpc_core::{Error, ErrorCode, Value};
 
 mod codes {

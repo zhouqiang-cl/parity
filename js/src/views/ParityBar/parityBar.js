@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -14,24 +14,30 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
+import { throttle } from 'lodash';
+import { observer } from 'mobx-react';
 import React, { Component, PropTypes } from 'react';
 import ReactDOM from 'react-dom';
+import { FormattedMessage } from 'react-intl';
 import { Link } from 'react-router';
 import { connect } from 'react-redux';
-import { throttle } from 'lodash';
 import store from 'store';
 
+import imagesEthcoreBlock from '~/../assets/images/parity-logo-white-no-text.svg';
+import { AccountCard, Badge, Button, ContainerTitle, IdentityIcon, ParityBackground, SectionList } from '~/ui';
 import { CancelIcon, FingerprintIcon } from '~/ui/Icons';
-import { Badge, Button, ContainerTitle, ParityBackground } from '~/ui';
-import { Embedded as Signer } from '../Signer';
 import DappsStore from '~/views/Dapps/dappsStore';
+import { Embedded as Signer } from '~/views/Signer';
 
-import imagesEthcoreBlock from '!url-loader!../../../assets/images/parity-logo-white-no-text.svg';
+import AccountStore from './accountStore';
 import styles from './parityBar.css';
 
 const LS_STORE_KEY = '_parity::parityBar';
 const DEFAULT_POSITION = { right: '1em', bottom: 0 };
+const DISPLAY_ACCOUNTS = 'accounts';
+const DISPLAY_SIGNER = 'signer';
 
+@observer
 class ParityBar extends Component {
   app = null;
   measures = null;
@@ -48,6 +54,7 @@ class ParityBar extends Component {
   };
 
   state = {
+    displayType: DISPLAY_SIGNER,
     moving: false,
     opened: false,
     position: DEFAULT_POSITION
@@ -66,6 +73,8 @@ class ParityBar extends Component {
   componentWillMount () {
     const { api } = this.context;
 
+    this.accountStore = new AccountStore(api);
+
     // Hook to the dapp loaded event to position the
     // Parity Bar accordingly
     DappsStore.get(api).on('loaded', (app) => {
@@ -83,14 +92,14 @@ class ParityBar extends Component {
     }
 
     if (count < newCount) {
-      this.setOpened(true);
+      this.setOpened(true, DISPLAY_SIGNER);
     } else if (newCount === 0 && count === 1) {
       this.setOpened(false);
     }
   }
 
-  setOpened (opened) {
-    this.setState({ opened });
+  setOpened (opened, displayType = DISPLAY_SIGNER) {
+    this.setState({ displayType, opened });
 
     if (!this.bar) {
       return;
@@ -112,10 +121,6 @@ class ParityBar extends Component {
   render () {
     const { moving, opened, position } = this.state;
 
-    const content = opened
-      ? this.renderExpanded()
-      : this.renderBar();
-
     const containerClassNames = opened
       ? [ styles.overlay ]
       : [ styles.bar ];
@@ -124,11 +129,12 @@ class ParityBar extends Component {
       containerClassNames.push(styles.moving);
     }
 
-    const parityBgClassName = opened
-      ? styles.expanded
-      : styles.corner;
-
-    const parityBgClassNames = [ parityBgClassName, styles.parityBg ];
+    const parityBgClassNames = [
+      opened
+        ? styles.expanded
+        : styles.corner,
+      styles.parityBg
+    ];
 
     if (moving) {
       parityBgClassNames.push(styles.moving);
@@ -163,13 +169,18 @@ class ParityBar extends Component {
         onMouseLeave={ this.onMouseLeave }
         onMouseMove={ this.onMouseMove }
         onMouseUp={ this.onMouseUp }
+        ref={ this.onRef }
       >
         <ParityBackground
           className={ parityBgClassNames.join(' ') }
           ref='container'
           style={ parityBgStyle }
         >
-          { content }
+          {
+            opened
+              ? this.renderExpanded()
+              : this.renderBar()
+          }
         </ParityBackground>
       </div>
     );
@@ -182,34 +193,47 @@ class ParityBar extends Component {
       return null;
     }
 
-    const parityIcon = (
-      <img
-        src={ imagesEthcoreBlock }
-        className={ styles.parityIcon }
-      />
-    );
-
-    const parityButton = (
-      <Button
-        className={ styles.parityButton }
-        icon={ parityIcon }
-        label={ this.renderLabel('Parity') }
-      />
-    );
-
     return (
-      <div
-        className={ styles.cornercolor }
-        ref={ this.onRef }
-      >
-        { this.renderLink(parityButton) }
+      <div className={ styles.cornercolor }>
+        <Button
+          className={ styles.iconButton }
+          icon={
+            <IdentityIcon
+              address={ this.accountStore.defaultAccount }
+              button
+              center
+              inline
+            />
+          }
+          onClick={ this.toggleAccountsDisplay }
+        />
+        {
+          this.renderLink(
+            <Button
+              className={ styles.parityButton }
+              icon={
+                <img
+                  className={ styles.parityIcon }
+                  src={ imagesEthcoreBlock }
+                />
+              }
+              label={
+                this.renderLabel(
+                  <FormattedMessage
+                    id='parityBar.label.parity'
+                    defaultMessage='Parity'
+                  />
+                )
+              }
+            />
+          )
+        }
         <Button
           className={ styles.button }
           icon={ <FingerprintIcon /> }
           label={ this.renderSignerLabel() }
-          onClick={ this.toggleDisplay }
+          onClick={ this.toggleSignerDisplay }
         />
-
         { this.renderDrag() }
       </div>
     );
@@ -261,23 +285,81 @@ class ParityBar extends Component {
   }
 
   renderExpanded () {
+    const { displayType } = this.state;
+
     return (
-      <div>
+      <div className={ styles.container }>
         <div className={ styles.header }>
           <div className={ styles.title }>
-            <ContainerTitle title='Parity Signer: Pending' />
+            <ContainerTitle
+              title={
+                displayType === DISPLAY_ACCOUNTS
+                  ? (
+                    <FormattedMessage
+                      id='parityBar.title.accounts'
+                      defaultMessage='Default Account'
+                    />
+                  )
+                  : (
+                    <FormattedMessage
+                      id='parityBar.title.signer'
+                      defaultMessage='Parity Signer: Pending'
+                    />
+                  )
+              }
+            />
           </div>
           <div className={ styles.actions }>
             <Button
               icon={ <CancelIcon /> }
-              label='Close'
-              onClick={ this.toggleDisplay }
+              label={
+                <FormattedMessage
+                  id='parityBar.button.close'
+                  defaultMessage='Close'
+                />
+              }
+              onClick={ this.toggleSignerDisplay }
             />
           </div>
         </div>
         <div className={ styles.content }>
-          <Signer />
+          {
+            displayType === DISPLAY_ACCOUNTS
+              ? (
+                <SectionList
+                  items={ this.accountStore.accounts }
+                  noStretch
+                  renderItem={ this.renderAccount }
+                />
+              )
+              : (
+                <Signer />
+              )
+          }
         </div>
+      </div>
+    );
+  }
+
+  renderAccount = (account) => {
+    const onMakeDefault = () => {
+      this.toggleAccountsDisplay();
+      this.accountStore.makeDefaultAccount(account.address);
+    };
+
+    return (
+      <div
+        className={ styles.account }
+        onClick={ onMakeDefault }
+      >
+        <AccountCard
+          account={ account }
+          className={
+            account.default
+              ? styles.selected
+              : styles.unselected
+          }
+        />
       </div>
     );
   }
@@ -307,7 +389,13 @@ class ParityBar extends Component {
       );
     }
 
-    return this.renderLabel('Signer', bubble);
+    return this.renderLabel(
+      <FormattedMessage
+        id='parityBar.label.signer'
+        defaultMessage='Signer'
+      />,
+      bubble
+    );
   }
 
   getHorizontal (x) {
@@ -485,10 +573,20 @@ class ParityBar extends Component {
     this.savePosition(position);
   }
 
-  toggleDisplay = () => {
+  toggleAccountsDisplay = () => {
     const { opened } = this.state;
 
-    this.setOpened(!opened);
+    this.setOpened(!opened, DISPLAY_ACCOUNTS);
+
+    if (!opened) {
+      this.accountStore.loadAccounts();
+    }
+  }
+
+  toggleSignerDisplay = () => {
+    const { opened } = this.state;
+
+    this.setOpened(!opened, DISPLAY_SIGNER);
   }
 
   get config () {
@@ -530,13 +628,22 @@ class ParityBar extends Component {
   stringToPosition (value) {
     switch (value) {
       case 'top-left':
-        return { top: 0, left: '1em' };
+        return {
+          left: '1em',
+          top: 0
+        };
 
       case 'top-right':
-        return { top: 0, right: '1em' };
+        return {
+          right: '1em',
+          top: 0
+        };
 
       case 'bottom-left':
-        return { bottom: 0, left: '1em' };
+        return {
+          bottom: 0,
+          left: '1em'
+        };
 
       case 'bottom-right':
       default:

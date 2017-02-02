@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -176,6 +176,7 @@ class AddressSelect extends Component {
     return (
       <Portal
         className={ styles.inputContainer }
+        isChildModal
         onClose={ this.handleClose }
         onKeyDown={ this.handleKeyDown }
         open={ expanded }

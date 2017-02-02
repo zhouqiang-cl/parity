@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -29,9 +29,9 @@ macro_rules! impl_hash {
 		#[derive(Default, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 		pub struct $name(pub $inner);
 
-		impl Into<$inner> for $name {
-			fn into(self) -> $inner {
-				self.0
+		impl From<$name> for $inner {
+			fn from(other: $name) -> $inner {
+				other.0
 			}
 		}
 

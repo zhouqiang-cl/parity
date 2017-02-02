@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Parity Technologies (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -47,7 +47,7 @@ impl EngineSigner {
 	}
 
 	/// Sign a consensus message hash.
-	pub fn sign(&self, hash: H256) -> Result<Signature, account_provider::Error> {
+	pub fn sign(&self, hash: H256) -> Result<Signature, account_provider::SignError> {
 		self.account_provider.lock().sign(*self.address.read(), self.password.read().clone(), hash)
 	}
 
