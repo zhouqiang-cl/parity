@@ -1,4 +1,4 @@
-// Copyright 2015, 2016 Ethcore (UK) Ltd.
+// Copyright 2015-2017 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -45,23 +45,6 @@ use super::vote_collector::VoteCollector;
 use self::message::*;
 use self::params::AbabParams;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-pub enum Step {
-	Propose,
-	Prevote,
-	Precommit,
-	Commit
-}
-
-impl Step {
-	pub fn is_pre(self) -> bool {
-		match self {
-			Step::Prevote | Step::Precommit => true,
-			_ => false,
-		}
-	}
-}
-
 pub type Height = usize;
 pub type View = usize;
 pub type BlockHash = H256;
@@ -71,23 +54,17 @@ pub struct Abab {
 	params: CommonParams,
 	gas_limit_bound_divisor: U256,
 	builtins: BTreeMap<Address, Builtin>,
-	step_service: IoService<()>,
+	transition: IoService<()>,
 	client: RwLock<Option<Weak<EngineClient>>>,
 	block_reward: U256,
 	/// Blockchain height.
 	height: AtomicUsize,
 	/// Consensus view.
 	view: AtomicUsize,
-	/// Consensus step.
-	step: RwLock<Step>,
 	/// Vote accumulator.
-	votes: VoteCollector<ConsensusMessage>,
+	votes: VoteCollector<AbabMessage>,
 	/// Used to sign messages and proposals.
 	signer: EngineSigner,
-	/// Message for the last PoLC.
-	lock_change: RwLock<Option<ConsensusMessage>>,
-	/// Last lock view.
-	last_lock: AtomicUsize,
 	/// Bare hash of the proposed block, used for seal submission.
 	proposal: RwLock<Option<H256>>,
 	/// Set used to determine the current validators.
@@ -103,11 +80,10 @@ impl Abab {
 				gas_limit_bound_divisor: our_params.gas_limit_bound_divisor,
 				builtins: builtins,
 				client: RwLock::new(None),
-				step_service: IoService::<()>::start()?,
+				transition: IoService::<()>::start()?,
 				block_reward: our_params.block_reward,
 				height: AtomicUsize::new(1),
 				view: AtomicUsize::new(0),
-				step: RwLock::new(Step::Propose),
 				votes: VoteCollector::default(),
 				signer: Default::default(),
 				lock_change: RwLock::new(None),
@@ -116,7 +92,7 @@ impl Abab {
 				validators: new_validator_set(our_params.validators),
 			});
 		let handler = TransitionHandler::new(Arc::downgrade(&engine) as Weak<Engine>, Box::new(our_params.timeout));
-		engine.step_service.register_handler(Arc::new(handler))?;
+		engine.transition.register_handler(Arc::new(handler))?;
 		Ok(engine)
 	}
 
@@ -144,110 +120,40 @@ impl Abab {
 		}
 	}
 
-	fn generate_message(&self, block_hash: Option<BlockHash>) -> Option<Bytes> {
-		let h = self.height.load(AtomicOrdering::SeqCst);
-		let r = self.view.load(AtomicOrdering::SeqCst);
-		let s = self.step.read();
-		let vote_info = message_info_rlp(&VoteStep::new(h, r, *s), block_hash);
-		match self.signer.sign(vote_info.sha3()).map(Into::into) {
+	fn broadcast_view_change(&self) {
+		let view_vote = ViewVote::new_view_change(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst));
+		let vote_rlp = ::rlp::encode(&view_vote);
+		match self.signer.sign(vote_rlp.sha3()).map(Into::into) {
 			Ok(signature) => {
-				let message_rlp = message_full_rlp(&signature, &vote_info);
-				let message = ConsensusMessage::new(signature, h, r, *s, block_hash);
+				let message_rlp = message_rlp(&signature, &vote_rlp);
+				let message = AbabMessage::new(signature, view_vote);
 				let validator = self.signer.address();
 				self.votes.vote(message.clone(), &validator);
-				debug!(target: "poa", "Generated {:?} as {}.", message, validator);
+				debug!(target: "engine", "Generated {:?} as {}.", message, validator);
 				self.handle_valid_message(&message);
-
-				Some(message_rlp)
+				self.broadcast_message(message_rlp);
 			},
-			Err(e) => {
-				trace!(target: "poa", "Could not sign the message {}", e);
-				None
-			},
-		}
-	}
-
-	fn generate_and_broadcast_message(&self, block_hash: Option<BlockHash>) {
-		if let Some(message) = self.generate_message(block_hash) {
-			self.broadcast_message(message);
+			Err(e) => trace!(target: "engine", "Could not sign a consensus message {}", e),
 		}
 	}
 
 	/// Broadcast all messages since last issued block to get the peers up to speed.
 	fn broadcast_old_messages(&self) {
-		for m in self.votes.get_up_to(&VoteStep::new(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst), Step::Precommit)).into_iter() {
+		for m in self.votes.get_up_to(&ViewVote::new(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))).into_iter() {
 			self.broadcast_message(m);
 		}
 	}
 
 	fn to_next_height(&self, height: Height) {
 		let new_height = height + 1;
-		debug!(target: "poa", "Received a Commit, transitioning to height {}.", new_height);
+		debug!(target: "engine", "Received a Commit, transitioning to height {}.", new_height);
 		self.last_lock.store(0, AtomicOrdering::SeqCst);
 		self.height.store(new_height, AtomicOrdering::SeqCst);
 		self.view.store(0, AtomicOrdering::SeqCst);
 		*self.lock_change.write() = None;
 	}
 
-	/// Use via step_service to transition steps.
-	fn to_step(&self, step: Step) {
-		if let Err(io_err) = self.step_service.send_message(step) {
-			warn!(target: "poa", "Could not proceed to step {}.", io_err)
-		}
-		*self.step.write() = step;
-		match step {
-			Step::Propose => {
-				*self.proposal.write() = None;
-				self.update_sealing()
-			},
-			Step::Prevote => {
-				let block_hash = match *self.lock_change.read() {
-					Some(ref m) if !self.should_unlock(m.vote_step.view) => m.block_hash,
-					_ => self.proposal.read().clone(),
-				};
-				self.generate_and_broadcast_message(block_hash);
-			},
-			Step::Precommit => {
-				trace!(target: "poa", "to_step: Precommit.");
-				let block_hash = match *self.lock_change.read() {
-					Some(ref m) if self.is_view(m) && m.block_hash.is_some() => {
-						trace!(target: "poa", "Setting last lock: {}", m.vote_step.view);
-						self.last_lock.store(m.vote_step.view, AtomicOrdering::SeqCst);
-						m.block_hash
-					},
-					_ => None,
-				};
-				self.generate_and_broadcast_message(block_hash);
-			},
-			Step::Commit => {
-				trace!(target: "poa", "to_step: Commit.");
-				// Commit the block using a complete signature set.
-				let view = self.view.load(AtomicOrdering::SeqCst);
-				let height = self.height.load(AtomicOrdering::SeqCst);
-				if let Some(block_hash) = *self.proposal.read() {
-					// Generate seal and remove old votes.
-					if self.is_signer_proposer() {
-						let proposal_step = VoteStep::new(height, view, Step::Propose);
-						let precommit_step = VoteStep::new(proposal_step.height, proposal_step.view, Step::Precommit);
-						if let Some(seal) = self.votes.seal_signatures(proposal_step, precommit_step, &block_hash) {
-							trace!(target: "poa", "Collected seal: {:?}", seal);
-							let seal = vec![
-								::rlp::encode(&view).to_vec(),
-								::rlp::encode(&seal.proposal).to_vec(),
-								::rlp::encode(&seal.votes).to_vec()
-							];
-							self.submit_seal(block_hash, seal);
-							self.to_next_height(height);
-						} else {
-							warn!(target: "poa", "Not enough votes found!");
-						}
-					}
-				}
-			},
-		}
-	}
-
-	fn is_authority(&self, address: &Address) -> bool {
+	fn is_validator(&self, address: &Address) -> bool {
 		self.validators.contains(address)
 	}
 
@@ -256,118 +162,101 @@ impl Abab {
 	}
 
 	/// Find the designated for the given view.
-	fn view_proposer(&self, height: Height, view: View) -> Address {
-		let proposer_nonce = height + view;
-		trace!(target: "poa", "Proposer nonce: {}", proposer_nonce);
-		self.validators.get(proposer_nonce)
+	fn view_primary(&self, height: Height, view: View) -> Address {
+		let primary_nonce = height + view;
+		trace!(target: "engine", "Proposer nonce: {}", primary_nonce);
+		self.validators.get(primary_nonce)
 	}
 
-	/// Check if address is a proposer for given view.
-	fn is_view_proposer(&self, height: Height, view: View, address: &Address) -> Result<(), EngineError> {
-		let proposer = self.view_proposer(height, view);
-		if proposer == *address {
+	/// Check if address is a primary for given view.
+	fn is_view_primary(&self, height: Height, view: View, address: &Address) -> Result<(), EngineError> {
+		let primary = self.view_primary(height, view);
+		if primary == *address {
 			Ok(())
 		} else {
-			Err(EngineError::NotProposer(Mismatch { expected: proposer, found: address.clone() }))
+			Err(EngineError::NotProposer(Mismatch { expected: primary, found: address.clone() }))
 		}
 	}
 
-	/// Check if current signer is the current proposer.
-	fn is_signer_proposer(&self) -> bool {
-		let proposer = self.view_proposer(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst));
-		self.signer.is_address(&proposer)
+	/// Check if current signer is the current primary.
+	fn is_signer_primary(&self) -> bool {
+		let primary = self.view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst));
+		self.signer.is_address(&primary)
 	}
 
-	fn is_height(&self, message: &ConsensusMessage) -> bool {
+	/// Check if current signer is the next primary.
+	fn is_signer_next_primary(&self) -> bool {
+		let primary = self.view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst) + 1);
+		self.signer.is_address(&primary)
+	}
+
+	fn is_height(&self, message: &AbabMessage) -> bool {
 		message.vote_step.is_height(self.height.load(AtomicOrdering::SeqCst)) 
 	}
 
-	fn is_view(&self, message: &ConsensusMessage) -> bool {
+	fn is_view(&self, message: &AbabMessage) -> bool {
 		message.vote_step.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) 
 	}
 
 	fn increment_view(&self, n: View) {
-		trace!(target: "poa", "increment_view: New view.");
+		trace!(target: "engine", "increment_view: New view.");
 		self.view.fetch_add(n, AtomicOrdering::SeqCst);
 	}
 
-	fn should_unlock(&self, lock_change_view: View) -> bool {
-		self.last_lock.load(AtomicOrdering::SeqCst) < lock_change_view
-			&& lock_change_view < self.view.load(AtomicOrdering::SeqCst)
-	}
-
-
-	fn has_enough_any_votes(&self) -> bool {
-		let step_votes = self.votes.count_round_votes(&VoteStep::new(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst), *self.step.read()));
-		self.is_above_threshold(step_votes)
-	}
-
-	fn has_enough_future_step_votes(&self, vote_step: &VoteStep) -> bool {
-		if vote_step.view > self.view.load(AtomicOrdering::SeqCst) {
-			let step_votes = self.votes.count_round_votes(vote_step);
-			self.is_above_threshold(step_votes)	
-		} else {
-			false
-		}
-	}
-
-	fn has_enough_aligned_votes(&self, message: &ConsensusMessage) -> bool {
+	fn has_enough_votes(&self, message: &AbabMessage) -> bool {
 		let aligned_count = self.votes.count_aligned_votes(&message);
 		self.is_above_threshold(aligned_count)
 	}
 
-	fn handle_valid_message(&self, message: &ConsensusMessage) {
-		let ref vote_step = message.vote_step;
-		let is_newer_than_lock = match *self.lock_change.read() {
-			Some(ref lock) => vote_step > &lock.vote_step,
-			None => true,
-		};
-		let lock_change = is_newer_than_lock
-			&& vote_step.step == Step::Prevote
-			&& message.block_hash.is_some()
-			&& self.has_enough_aligned_votes(message);
-		if lock_change {
-			trace!(target: "poa", "handle_valid_message: Lock change.");
-			*self.lock_change.write()	= Some(message.clone());
-		}
-		// Check if it can affect the step transition.
-		if self.is_height(message) {
-			let next_step = match *self.step.read() {
-				Step::Precommit if self.has_enough_aligned_votes(message) => {
-					if message.block_hash.is_none() {
-						self.increment_view(1);
-						Some(Step::Propose)
-					} else {
-						Some(Step::Commit)
-					}
-				},
-				Step::Precommit if self.has_enough_future_step_votes(&vote_step) => {
-					self.increment_view(vote_step.view - self.view.load(AtomicOrdering::SeqCst));
-					Some(Step::Precommit)
-				},
-				// Avoid counting twice.
-				Step::Prevote if lock_change => Some(Step::Precommit),
-				Step::Prevote if self.has_enough_aligned_votes(message) => Some(Step::Precommit),
-				Step::Prevote if self.has_enough_future_step_votes(&vote_step) => {
-					self.increment_view(vote_step.view - self.view.load(AtomicOrdering::SeqCst));
-					Some(Step::Prevote)
-				},
-				_ => None,
-			};
+	fn is_new_view(&self) -> bool {
+		self.vote.count_round_votes(&ViewVote::new_view_change(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))) > self.validators.count() * 1/3
+	}
 
-			if let Some(step) = next_step {
-				trace!(target: "poa", "Transition to {:?} triggered.", step);
-				self.to_step(step);
-			}
+	fn set_timeout(&self) {
+		if let Err(io_err) = self.transition.send_message(()) {
+			warn!(target: "engine", "Could not set a new view timeout: {}", io_err)
 		}
+	}
+
+	fn handle_valid_message(&self, message: &AbabMessage) {
+		// Check if it can affect the step transition.
+		if !self.is_height(message) { return; }
+
+		match message.view_vote.vote {
+			Vote::Vote(hash) if self.is_signer_primary() && self.has_enough_votes(message) => {
+				// Commit the block using a complete signature set.
+				let view = self.view.load(AtomicOrdering::SeqCst);
+				let height = self.height.load(AtomicOrdering::SeqCst);
+				if let Some(block_hash) = *self.proposal.read() {
+					// Generate seal and remove old votes.
+					let proposal_step = ViewVote::new_proposal(height, view, block_hash);
+					let precommit_step = ViewVote::new(proposal_step.height, proposal_step.view);
+					if let Some(seal) = self.votes.seal_signatures(proposal_step, precommit_step, &block_hash) {
+						trace!(target: "engine", "Collected seal: {:?}", seal);
+						let seal = vec![
+							::rlp::encode(&view).to_vec(),
+							::rlp::encode(&seal.proposal).to_vec(),
+							::rlp::EMPTY_LIST_RLP.to_vec(),
+							::rlp::encode(&seal.votes).to_vec()
+						];
+						self.submit_seal(block_hash, seal);
+						self.to_next_height(height);
+					} else {
+						warn!(target: "engine", "Not enough votes found!");
+					}
+				}		
+			},
+			Vote::ViewChange if self.is_signer_next_primary() && self.is_new_view() => {},
+			Vote::Proposal(hash) => {},
+		};
 	}
 }
 
 impl Engine for Abab {
 	fn name(&self) -> &str { "Abab" }
 	fn version(&self) -> SemanticVersion { SemanticVersion::new(1, 0, 0) }
-	/// (consensus view, proposal signature, authority signatures)
-	fn seal_fields(&self) -> usize { 3 }
+	/// (consensus view, proposal signature, view change signatures, vote signatures)
+	fn seal_fields(&self) -> usize { 4 }
 
 	fn params(&self) -> &CommonParams { &self.params }
 	fn builtins(&self) -> &BTreeMap<Address, Builtin> { &self.builtins }
@@ -377,7 +266,7 @@ impl Engine for Abab {
 
 	/// Additional engine-specific information for the user/developer concerning `header`.
 	fn extra_info(&self, header: &Header) -> BTreeMap<String, String> {
-		let message = ConsensusMessage::new_proposal(header).expect("Invalid header.");
+		let message = AbabMessage::new_proposal(header).expect("Invalid header.");
 		map![
 			"signature".into() => message.signature.to_string(),
 			"height".into() => message.vote_step.height.to_string(),
@@ -405,51 +294,53 @@ impl Engine for Abab {
 
 	/// Should this node participate.
 	fn is_sealer(&self, address: &Address) -> Option<bool> {
-		Some(self.is_authority(address))
+		Some(self.is_validator(address))
 	}
 
 	/// Attempt to seal generate a proposal seal.
 	fn generate_seal(&self, block: &ExecutedBlock) -> Seal {
 		let header = block.header();
 		let author = header.author();
-		// Only proposer can generate seal if None was generated.
-		if !self.is_signer_proposer() || self.proposal.read().is_some() {
+		// Only primary can generate seal if None was generated.
+		if !self.is_signer_primary() || self.proposal.read().is_some() || !self.is_new_view() {
 			return Seal::None;
 		}
 
 		let height = header.number() as Height;
 		let view = self.view.load(AtomicOrdering::SeqCst);
-		let bh = Some(header.bare_hash());
-		let vote_info = message_info_rlp(&VoteStep::new(height, view, Step::Propose), bh.clone());
-		if let Ok(signature) = self.signer.sign(vote_info.sha3()).map(Into::into) {
+		let bh = header.bare_hash();
+		let proposal = ViewVote::new_proposal(height, view, bh);
+		if let Ok(signature) = self.signer.sign(encode(&proposal).sha3()).map(Into::into) {
 			// Insert Propose vote.
-			debug!(target: "poa", "Submitting proposal {} at height {} view {}.", header.bare_hash(), height, view);
-			self.votes.vote(ConsensusMessage::new(signature, height, view, Step::Propose, bh), author);
+			debug!(target: "engine", "Submitting proposal {} at height {} view {}.", bh, height, view);
+			self.votes.vote(AbabMessage { signature: signature, message: proposal }, author);
 			// Remember proposal for later seal submission.
 			*self.proposal.write() = bh;
+			let signatures = self.votes.seal_signatures(proposal, ViewVote::new_view_change(height, view), bh);
 			Seal::Proposal(vec![
 				::rlp::encode(&view).to_vec(),
-				::rlp::encode(&signature).to_vec(),
+				::rlp::encode(&signatures.proposal).to_vec(),
+				::rlp::encode(&signatures.votes).to_vec(),
 				::rlp::EMPTY_LIST_RLP.to_vec()
 			])
 		} else {
-			warn!(target: "poa", "generate_seal: FAIL: accounts secret key unavailable");
+			warn!(target: "engine", "generate_seal: FAIL: accounts secret key unavailable");
 			Seal::None
 		}
 	}
 
 	fn handle_message(&self, rlp: &[u8]) -> Result<(), Error> {
 		let rlp = UntrustedRlp::new(rlp);
-		let message: ConsensusMessage = rlp.as_val()?;
+		let message: AbabMessage = rlp.as_val()?;
 		if !self.votes.is_old_or_known(&message) {
 			let sender = public_to_address(&recover(&message.signature.into(), &rlp.at(1)?.as_raw().sha3())?);
-			if !self.is_authority(&sender) {
+			if !self.is_validator(&sender) {
 				Err(EngineError::NotAuthorized(sender))?;
 			}
 			if self.votes.vote(message.clone(), &sender).is_some() {
 				Err(EngineError::DoubleVote(sender))?
 			}
-			trace!(target: "poa", "Handling a valid {:?} from {}.", message, sender);
+			trace!(target: "engine", "Handling a valid {:?} from {}.", message, sender);
 			self.broadcast_message(rlp.as_raw().to_vec());
 			self.handle_valid_message(&message);
 		}
@@ -489,21 +380,21 @@ impl Engine for Abab {
 	}
 
 	fn verify_block_unordered(&self, header: &Header, _block: Option<&[u8]>) -> Result<(), Error> {
-		let proposal = ConsensusMessage::new_proposal(header)?;
-		let proposer = proposal.verify()?;
-		if !self.is_authority(&proposer) {
-			Err(EngineError::NotAuthorized(proposer))?
+		let proposal = AbabMessage::new_proposal(header)?;
+		let primary = proposal.verify()?;
+		if !self.is_validator(&primary) {
+			Err(EngineError::NotAuthorized(primary))?
 		}
 
-		let precommit_hash = proposal.precommit_hash();
+		let vote_hash = proposal.vote_hash();
 		let ref signatures_field = header.seal()[2];
 		let mut signature_count = 0;
 		let mut origins = HashSet::new();
 		for rlp in UntrustedRlp::new(signatures_field).iter() {
-			let precommit: ConsensusMessage = ConsensusMessage::new_commit(&proposal, rlp.as_val()?);
+			let precommit: AbabMessage = AbabMessage::new_commit(&proposal, rlp.as_val()?);
 			let address = match self.votes.get(&precommit) {
 				Some(a) => a,
-				None => public_to_address(&recover(&precommit.signature.into(), &precommit_hash)?),
+				None => public_to_address(&recover(&precommit.signature.into(), &vote_hash)?),
 			};
 			if !self.validators.contains(&address) {
 				Err(EngineError::NotAuthorized(address.to_owned()))?
@@ -512,7 +403,7 @@ impl Engine for Abab {
 			if origins.insert(address) {
 				signature_count += 1;
 			} else {
-				warn!(target: "poa", "verify_block_unordered: Duplicate signature from {} on the seal.", address);
+				warn!(target: "engine", "verify_block_unordered: Duplicate signature from {} on the seal.", address);
 				Err(BlockError::InvalidSeal)?;
 			}
 		}
@@ -528,7 +419,7 @@ impl Engine for Abab {
 					found: signatures_len
 				}))?;
 			}
-			self.is_view_proposer(proposal.vote_step.height, proposal.vote_step.view, &proposer)?;
+			self.is_view_primary(proposal.vote_step.height, proposal.vote_step.view, &primary)?;
 		}
 		Ok(())
 	}
@@ -549,88 +440,38 @@ impl Engine for Abab {
 	}
 
 	fn set_signer(&self, ap: Arc<AccountProvider>, address: Address, password: String) {
-		{
-			self.signer.set(ap, address, password);
-		}
-		self.to_step(Step::Propose);
+		self.signer.set(ap, address, password);
 	}
 
 	fn stop(&self) {
-		self.step_service.stop()
-	}
-
-	fn is_new_best_block(&self, _best_total_difficulty: U256, best_header: HeaderView, _parent_details: &BlockDetails, new_header: &HeaderView) -> bool {
-		let new_number = new_header.number();
-		let best_number = best_header.number();
-		trace!(target: "poa", "new_header: {}, best_header: {}", new_number, best_number);
-		if new_number != best_number {
-			new_number > best_number
-		} else {
-			let new_seal = new_header.seal();
-			let best_seal = best_header.seal();
-			let new_signatures = new_seal.get(2).expect("Abab seal should have three elements.").len();
-			let best_signatures = best_seal.get(2).expect("Abab seal should have three elements.").len();
-			if new_signatures > best_signatures {
-				true
-			} else {
-				let new_view: View = ::rlp::Rlp::new(&new_seal.get(0).expect("Abab seal should have three elements.")).as_val();
-				let best_view: View = ::rlp::Rlp::new(&best_seal.get(0).expect("Abab seal should have three elements.")).as_val();
-				new_view > best_view
-			}
-		}
+		self.transition.stop()
 	}
 
 	fn is_proposal(&self, header: &Header) -> bool {
-		let signatures_len = header.seal()[2].len();
+		let signatures_len = header.seal()[3].len();
 		// Signatures have to be an empty list rlp.
-		let proposal = ConsensusMessage::new_proposal(header).expect("block went through full verification; this Engine verifies new_proposal creation; qed");
+		let proposal = AbabMessage::new_proposal(header).expect("block went through full verification; this Engine verifies new_proposal creation; qed");
+		let message = proposal.message;
 		if signatures_len != 1 {
 			// New Commit received, skip to next height.
-			trace!(target: "poa", "Received a commit: {:?}.", proposal.vote_step);
-			self.to_next_height(proposal.vote_step.height);
+			trace!(target: "engine", "Received a commit: {:?}.", message);
+			self.to_next_height(message.height);
 			return false;
 		}
-		let proposer = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
-		debug!(target: "poa", "Received a new proposal {:?} from {}.", proposal.vote_step, proposer);
+		let primary = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
+		debug!(target: "engine", "Received a new proposal {:?} from {}.", message, primary);
 		if self.is_view(&proposal) {
-			*self.proposal.write() = proposal.block_hash.clone();
+			*self.proposal.write() = Some(message.block_hash.clone());
+			self.transition.send_message(());
 		}
-		self.votes.vote(proposal, &proposer);
+		self.votes.vote(proposal, &primary);
 		true
 	}
 
-	/// Equivalent to a timeout: to be used for tests.
+	/// Called on timeout.
 	fn step(&self) {
-		let next_step = match *self.step.read() {
-			Step::Propose => {
-				trace!(target: "poa", "Propose timeout.");
-				Step::Prevote
-			},
-			Step::Prevote if self.has_enough_any_votes() => {
-				trace!(target: "poa", "Prevote timeout.");
-				Step::Precommit
-			},
-			Step::Prevote => {
-				trace!(target: "poa", "Prevote timeout without enough votes.");
-				self.broadcast_old_messages();
-				Step::Prevote
-			},
-			Step::Precommit if self.has_enough_any_votes() => {
-				trace!(target: "poa", "Precommit timeout.");
-				self.increment_view(1);
-				Step::Propose
-			},
-			Step::Precommit => {
-				trace!(target: "poa", "Precommit timeout without enough votes.");
-				self.broadcast_old_messages();
-				Step::Precommit
-			},
-			Step::Commit => {
-				trace!(target: "poa", "Commit timeout.");
-				Step::Propose
-			},
-		};
-		self.to_step(next_step);
+		self.set_timeout();
+		self.broadcast_view_change();
 	}
 
 	fn register_client(&self, client: Weak<Client>) {
@@ -656,19 +497,19 @@ mod tests {
 	use super::*;
 	use super::message::*;
 
-	/// Accounts inserted with "0" and "1" are validators. First proposer is "0".
+	/// Accounts inserted with "0" and "1" are validators. First primary is "0".
 	fn setup() -> (Spec, Arc<AccountProvider>) {
 		let tap = Arc::new(AccountProvider::transient_provider());
 		let spec = Spec::new_test_tendermint();
 		(spec, tap)
 	}
 
-	fn propose_default(spec: &Spec, proposer: Address) -> (ClosedBlock, Vec<Bytes>) {
+	fn propose_default(spec: &Spec, primary: Address) -> (ClosedBlock, Vec<Bytes>) {
 		let mut db_result = get_temp_state_db();
 		let db = spec.ensure_db_good(db_result.take(), &Default::default()).unwrap();
 		let genesis_header = spec.genesis_header();
 		let last_hashes = Arc::new(vec![genesis_header.hash()]);
-		let b = OpenBlock::new(spec.engine.as_ref(), Default::default(), false, db.boxed_clone(), &genesis_header, last_hashes, proposer, (3141562.into(), 31415620.into()), vec![]).unwrap();
+		let b = OpenBlock::new(spec.engine.as_ref(), Default::default(), false, db.boxed_clone(), &genesis_header, last_hashes, primary, (3141562.into(), 31415620.into()), vec![]).unwrap();
 		let b = b.close();
 		if let Seal::Proposal(seal) = spec.engine.generate_seal(b.block()) {
 			(b, seal)
@@ -678,7 +519,7 @@ mod tests {
 	}
 
 	fn vote<F>(engine: &Engine, signer: F, height: usize, view: usize, step: Step, block_hash: Option<H256>) -> Bytes where F: FnOnce(H256) -> Result<H520, ::account_provider::Error> {
-		let mi = message_info_rlp(&VoteStep::new(height, view, step), block_hash);
+		let mi = message_info_rlp(&ViewVote::new(height, view, step), block_hash);
 		let m = message_full_rlp(&signer(mi.sha3()).unwrap().into(), &mi);
 		engine.handle_message(&m).unwrap();
 		m
@@ -686,7 +527,7 @@ mod tests {
 
 	fn proposal_seal(tap: &Arc<AccountProvider>, header: &Header, view: View) -> Vec<Bytes> {
 		let author = header.author();
-		let vote_info = message_info_rlp(&VoteStep::new(header.number() as Height, view, Step::Propose), Some(header.bare_hash()));
+		let vote_info = message_info_rlp(&ViewVote::new(header.number() as Height, view, Step::Propose), Some(header.bare_hash()));
 		let signature = tap.sign(*author, None, vote_info.sha3()).unwrap();
 		vec![
 			::rlp::encode(&view).to_vec(),
@@ -756,7 +597,7 @@ mod tests {
 	}
 
 	#[test]
-	fn allows_correct_proposer() {
+	fn allows_correct_primary() {
 		let (spec, tap) = setup();
 		let engine = spec.engine;
 
@@ -765,14 +606,14 @@ mod tests {
 		header.set_author(validator);
 		let seal = proposal_seal(&tap, &header, 0);
 		header.set_seal(seal);
-		// Good proposer.
+		// Good primary.
 		assert!(engine.verify_block_unordered(&header.clone(), None).is_ok());
 
 		let validator = insert_and_unlock(&tap, "1");
 		header.set_author(validator);
 		let seal = proposal_seal(&tap, &header, 0);
 		header.set_seal(seal);
-		// Bad proposer.
+		// Bad primary.
 		match engine.verify_block_unordered(&header, None) {
 			Err(Error::Engine(EngineError::NotProposer(_))) => {},
 			_ => panic!(),
@@ -796,12 +637,12 @@ mod tests {
 		let engine = spec.engine;
 
 		let mut header = Header::default();
-		let proposer = insert_and_unlock(&tap, "1");
-		header.set_author(proposer);
+		let primary = insert_and_unlock(&tap, "1");
+		header.set_author(primary);
 		let mut seal = proposal_seal(&tap, &header, 0);
 
-		let vote_info = message_info_rlp(&VoteStep::new(0, 0, Step::Precommit), Some(header.bare_hash()));
-		let signature1 = tap.sign(proposer, None, vote_info.sha3()).unwrap();
+		let vote_info = message_info_rlp(&ViewVote::new(0, 0, Step::Precommit), Some(header.bare_hash()));
+		let signature1 = tap.sign(primary, None, vote_info.sha3()).unwrap();
 
 		seal[2] = ::rlp::encode(&vec![H520::from(signature1.clone())]).to_vec();
 		header.set_seal(seal.clone());
@@ -838,9 +679,9 @@ mod tests {
 	fn can_generate_seal() {
 		let (spec, tap) = setup();
 
-		let proposer = insert_and_register(&tap, spec.engine.as_ref(), "1");
+		let primary = insert_and_register(&tap, spec.engine.as_ref(), "1");
 
-		let (b, seal) = propose_default(&spec, proposer);
+		let (b, seal) = propose_default(&spec, primary);
 		assert!(b.lock().try_seal(spec.engine.as_ref(), seal).is_ok());
 		spec.engine.stop();
 	}
@@ -849,9 +690,9 @@ mod tests {
 	fn can_recognize_proposal() {
 		let (spec, tap) = setup();
 
-		let proposer = insert_and_register(&tap, spec.engine.as_ref(), "1");
+		let primary = insert_and_register(&tap, spec.engine.as_ref(), "1");
 
-		let (b, seal) = propose_default(&spec, proposer);
+		let (b, seal) = propose_default(&spec, primary);
 		let sealed = b.lock().seal(spec.engine.as_ref(), seal).unwrap();
 		assert!(spec.engine.is_proposal(sealed.header()));
 		spec.engine.stop();

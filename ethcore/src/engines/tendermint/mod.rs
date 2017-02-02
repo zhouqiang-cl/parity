@@ -287,11 +287,7 @@ impl Tendermint {
 	}
 
 	fn is_view(&self, message: &ConsensusMessage) -> bool {
-<<<<<<< HEAD
-		message.vote_step.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) 
-=======
 		message.vote_step.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))
->>>>>>> master
 	}
 
 	fn increment_view(&self, n: View) {
@@ -313,11 +309,7 @@ impl Tendermint {
 	fn has_enough_future_step_votes(&self, vote_step: &VoteStep) -> bool {
 		if vote_step.view > self.view.load(AtomicOrdering::SeqCst) {
 			let step_votes = self.votes.count_round_votes(vote_step);
-<<<<<<< HEAD
-			self.is_above_threshold(step_votes)	
-=======
 			self.is_above_threshold(step_votes)
->>>>>>> master
 		} else {
 			false
 		}
