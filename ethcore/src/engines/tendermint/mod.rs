@@ -233,18 +233,20 @@ impl Tendermint {
 					if self.is_signer_proposer() {
 						let proposal_step = VoteStep::new(height, view, Step::Propose);
 						let precommit_step = VoteStep::new(proposal_step.height, proposal_step.view, Step::Precommit);
-						if let Some(seal) = self.votes.seal_signatures(proposal_step, precommit_step, &block_hash) {
-							trace!(target: "poa", "Collected seal: {:?}", seal);
+						let votes = self.votes.round_signatures(&precommit_step, &block_hash);
+						if let Some(proposal) = self.votes.round_signatures(&proposal_step, &block_hash).get(0) {
+							trace!(target: "poa", "Collected seal: {:?}", votes);
 							let seal = vec![
 								::rlp::encode(&view).to_vec(),
-								::rlp::encode(&seal.proposal).to_vec(),
-								::rlp::encode(&seal.votes).to_vec()
+								::rlp::encode(proposal).to_vec(),
+								::rlp::encode(&votes).to_vec()
 							];
 							self.submit_seal(block_hash, seal);
 							self.to_next_height(height);
 						} else {
 							warn!(target: "poa", "Not enough votes found!");
 						}
+						self.votes.throw_out_old(&precommit_step);
 					}
 				}
 			},
