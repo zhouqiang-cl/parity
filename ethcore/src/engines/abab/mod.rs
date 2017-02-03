@@ -86,8 +86,6 @@ impl Abab {
 				view: AtomicUsize::new(0),
 				votes: VoteCollector::default(),
 				signer: Default::default(),
-				lock_change: RwLock::new(None),
-				last_lock: AtomicUsize::new(0),
 				proposal: RwLock::new(None),
 				validators: new_validator_set(our_params.validators),
 			});
@@ -122,7 +120,7 @@ impl Abab {
 
 	fn broadcast_view_change(&self) {
 		let view_vote = ViewVote::new_view_change(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst));
-		let vote_rlp = ::rlp::encode(&view_vote);
+		let vote_rlp = ::rlp::encode(&view_vote).to_vec();
 		match self.signer.sign(vote_rlp.sha3()).map(Into::into) {
 			Ok(signature) => {
 				let message_rlp = message_rlp(&signature, &vote_rlp);
@@ -139,7 +137,7 @@ impl Abab {
 
 	/// Broadcast all messages since last issued block to get the peers up to speed.
 	fn broadcast_old_messages(&self) {
-		for m in self.votes.get_up_to(&ViewVote::new(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))).into_iter() {
+		for m in self.votes.get_up_to(&ViewVote::new_view_change(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))).into_iter() {
 			self.broadcast_message(m);
 		}
 	}
@@ -147,10 +145,8 @@ impl Abab {
 	fn to_next_height(&self, height: Height) {
 		let new_height = height + 1;
 		debug!(target: "engine", "Received a Commit, transitioning to height {}.", new_height);
-		self.last_lock.store(0, AtomicOrdering::SeqCst);
 		self.height.store(new_height, AtomicOrdering::SeqCst);
 		self.view.store(0, AtomicOrdering::SeqCst);
-		*self.lock_change.write() = None;
 	}
 
 	fn is_validator(&self, address: &Address) -> bool {
@@ -168,39 +164,27 @@ impl Abab {
 		self.validators.get(primary_nonce)
 	}
 
-	/// Check if address is a primary for given view.
-	fn is_view_primary(&self, height: Height, view: View, address: &Address) -> Result<(), EngineError> {
-		let primary = self.view_primary(height, view);
-		if primary == *address {
-			Ok(())
-		} else {
-			Err(EngineError::NotProposer(Mismatch { expected: primary, found: address.clone() }))
-		}
+	/// Check if current signer is a primary for given view.
+	fn is_view_primary(&self, height: Height, view: View) -> bool {
+		self.signer.is_address(&self.view_primary(height, view))
 	}
 
 	/// Check if current signer is the current primary.
-	fn is_signer_primary(&self) -> bool {
-		let primary = self.view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst));
-		self.signer.is_address(&primary)
-	}
-
-	/// Check if current signer is the next primary.
-	fn is_signer_next_primary(&self) -> bool {
-		let primary = self.view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst) + 1);
-		self.signer.is_address(&primary)
+	fn is_primary(&self) -> bool {
+		self.is_view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))
 	}
 
 	fn is_height(&self, message: &AbabMessage) -> bool {
-		message.vote_step.is_height(self.height.load(AtomicOrdering::SeqCst)) 
+		message.view_vote.is_height(self.height.load(AtomicOrdering::SeqCst))
 	}
 
 	fn is_view(&self, message: &AbabMessage) -> bool {
-		message.vote_step.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) 
+		message.view_vote.is_view(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) 
 	}
 
-	fn increment_view(&self, n: View) {
-		trace!(target: "engine", "increment_view: New view.");
-		self.view.fetch_add(n, AtomicOrdering::SeqCst);
+	fn new_view(&self) {
+		trace!(target: "engine", "New view.");
+		self.view.fetch_add(1, AtomicOrdering::SeqCst);
 	}
 
 	fn has_enough_votes(&self, message: &AbabMessage) -> bool {
@@ -208,8 +192,8 @@ impl Abab {
 		self.is_above_threshold(aligned_count)
 	}
 
-	fn is_new_view(&self) -> bool {
-		self.vote.count_round_votes(&ViewVote::new_view_change(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst))) > self.validators.count() * 1/3
+	fn is_new_view(&self, view: View) -> bool {
+		self.votes.count_aligned_votes(&AbabMessage::new_view_change(Default::default(), self.height.load(AtomicOrdering::SeqCst), view)) > self.validators.count() * 1/3
 	}
 
 	fn set_timeout(&self) {
@@ -221,33 +205,21 @@ impl Abab {
 	fn handle_valid_message(&self, message: &AbabMessage) {
 		// Check if it can affect the step transition.
 		if !self.is_height(message) { return; }
-
+		let view = self.view.load(AtomicOrdering::SeqCst);
+		let height = self.height.load(AtomicOrdering::SeqCst);
 		match message.view_vote.vote {
-			Vote::Vote(hash) if self.is_signer_primary() && self.has_enough_votes(message) => {
+			Vote::Vote(hash) if self.is_primary() && self.has_enough_votes(message) => {
 				// Commit the block using a complete signature set.
-				let view = self.view.load(AtomicOrdering::SeqCst);
-				let height = self.height.load(AtomicOrdering::SeqCst);
 				if let Some(block_hash) = *self.proposal.read() {
 					// Generate seal and remove old votes.
-					let proposal_step = ViewVote::new_proposal(height, view, block_hash);
-					let precommit_step = ViewVote::new(proposal_step.height, proposal_step.view);
-					if let Some(seal) = self.votes.seal_signatures(proposal_step, precommit_step, &block_hash) {
-						trace!(target: "engine", "Collected seal: {:?}", seal);
-						let seal = vec![
-							::rlp::encode(&view).to_vec(),
-							::rlp::encode(&seal.proposal).to_vec(),
-							::rlp::EMPTY_LIST_RLP.to_vec(),
-							::rlp::encode(&seal.votes).to_vec()
-						];
-						self.submit_seal(block_hash, seal);
-						self.to_next_height(height);
-					} else {
-						warn!(target: "engine", "Not enough votes found!");
-					}
 				}		
 			},
-			Vote::ViewChange if self.is_signer_next_primary() && self.is_new_view() => {},
-			Vote::Proposal(hash) => {},
+			Vote::ViewChange if self.is_view_primary(height, view) && self.is_new_view(message.view_vote.view) => {
+				// Generate a block in the new view.
+				self.new_view();
+				self.update_sealing();
+			},
+			_ => {},
 		};
 	}
 }
@@ -267,12 +239,7 @@ impl Engine for Abab {
 	/// Additional engine-specific information for the user/developer concerning `header`.
 	fn extra_info(&self, header: &Header) -> BTreeMap<String, String> {
 		let message = AbabMessage::new_proposal(header).expect("Invalid header.");
-		map![
-			"signature".into() => message.signature.to_string(),
-			"height".into() => message.vote_step.height.to_string(),
-			"view".into() => message.vote_step.view.to_string(),
-			"block_hash".into() => message.block_hash.as_ref().map(ToString::to_string).unwrap_or("".into())
-		]
+		message.info()
 	}
 
 	fn schedule(&self, _env_info: &EnvInfo) -> Schedule {
@@ -302,7 +269,7 @@ impl Engine for Abab {
 		let header = block.header();
 		let author = header.author();
 		// Only primary can generate seal if None was generated.
-		if !self.is_signer_primary() || self.proposal.read().is_some() || !self.is_new_view() {
+		if !self.is_primary() || self.proposal.read().is_some() {
 			return Seal::None;
 		}
 
@@ -310,12 +277,12 @@ impl Engine for Abab {
 		let view = self.view.load(AtomicOrdering::SeqCst);
 		let bh = header.bare_hash();
 		let proposal = ViewVote::new_proposal(height, view, bh);
-		if let Ok(signature) = self.signer.sign(encode(&proposal).sha3()).map(Into::into) {
+		if let Ok(signature) = self.signer.sign(::rlp::encode(&proposal).sha3()).map(Into::into) {
 			// Insert Propose vote.
 			debug!(target: "engine", "Submitting proposal {} at height {} view {}.", bh, height, view);
 			self.votes.vote(AbabMessage { signature: signature, message: proposal }, author);
 			// Remember proposal for later seal submission.
-			*self.proposal.write() = bh;
+			*self.proposal.write() = Some(bh);
 			let signatures = self.votes.seal_signatures(proposal, ViewVote::new_view_change(height, view), bh);
 			Seal::Proposal(vec![
 				::rlp::encode(&view).to_vec(),
@@ -333,7 +300,7 @@ impl Engine for Abab {
 		let rlp = UntrustedRlp::new(rlp);
 		let message: AbabMessage = rlp.as_val()?;
 		if !self.votes.is_old_or_known(&message) {
-			let sender = public_to_address(&recover(&message.signature.into(), &rlp.at(1)?.as_raw().sha3())?);
+			let sender = message.verify_raw(rlp)?;
 			if !self.is_validator(&sender) {
 				Err(EngineError::NotAuthorized(sender))?;
 			}
@@ -386,15 +353,15 @@ impl Engine for Abab {
 			Err(EngineError::NotAuthorized(primary))?
 		}
 
-		let vote_hash = proposal.vote_hash();
+		let vote_hash = proposal.view_vote.vote_hash();
 		let ref signatures_field = header.seal()[2];
 		let mut signature_count = 0;
 		let mut origins = HashSet::new();
 		for rlp in UntrustedRlp::new(signatures_field).iter() {
-			let precommit: AbabMessage = AbabMessage::new_commit(&proposal, rlp.as_val()?);
-			let address = match self.votes.get(&precommit) {
+			let vote: AbabMessage = AbabMessage::new_vote(&proposal, rlp.as_val()?);
+			let address = match self.votes.get(&vote) {
 				Some(a) => a,
-				None => public_to_address(&recover(&precommit.signature.into(), &vote_hash)?),
+				None => vote.verify_hash(&vote_hash)?,
 			};
 			if !self.validators.contains(&address) {
 				Err(EngineError::NotAuthorized(address.to_owned()))?
@@ -408,7 +375,7 @@ impl Engine for Abab {
 			}
 		}
 
-		// Check if its a proposal if there is not enough precommits.
+		// Check if its a proposal if there is not enough votes.
 		if !self.is_above_threshold(signature_count) {
 			let signatures_len = signatures_field.len();
 			// Proposal has to have an empty signature list.
@@ -419,7 +386,10 @@ impl Engine for Abab {
 					found: signatures_len
 				}))?;
 			}
-			self.is_view_primary(proposal.vote_step.height, proposal.vote_step.view, &primary)?;
+			let correct_primary = self.view_primary(proposal.view_vote.height, proposal.view_vote.view);
+			if correct_primary != primary {
+				Err(EngineError::NotProposer(Mismatch { expected: correct_primary, found: primary }))?
+			}
 		}
 		Ok(())
 	}
@@ -454,8 +424,10 @@ impl Engine for Abab {
 		let message = proposal.message;
 		if signatures_len != 1 {
 			// New Commit received, skip to next height.
-			trace!(target: "engine", "Received a commit: {:?}.", message);
 			self.to_next_height(message.height);
+			if self.is_view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) {
+				self.update_sealing()
+			}
 			return false;
 		}
 		let primary = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
@@ -476,309 +448,6 @@ impl Engine for Abab {
 
 	fn register_client(&self, client: Weak<Client>) {
 		*self.client.write() = Some(client.clone());
-		self.validators.register_call_contract(client);
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use util::*;
-	use block::*;
-	use error::{Error, BlockError};
-	use header::Header;
-	use env_info::EnvInfo;
-	use ethkey::Secret;
-	use client::chain_notify::ChainNotify;
-	use miner::MinerService;
-	use tests::helpers::*;
-	use account_provider::AccountProvider;
-	use spec::Spec;
-	use engines::{Engine, EngineError, Seal};
-	use super::*;
-	use super::message::*;
-
-	/// Accounts inserted with "0" and "1" are validators. First primary is "0".
-	fn setup() -> (Spec, Arc<AccountProvider>) {
-		let tap = Arc::new(AccountProvider::transient_provider());
-		let spec = Spec::new_test_tendermint();
-		(spec, tap)
-	}
-
-	fn propose_default(spec: &Spec, primary: Address) -> (ClosedBlock, Vec<Bytes>) {
-		let mut db_result = get_temp_state_db();
-		let db = spec.ensure_db_good(db_result.take(), &Default::default()).unwrap();
-		let genesis_header = spec.genesis_header();
-		let last_hashes = Arc::new(vec![genesis_header.hash()]);
-		let b = OpenBlock::new(spec.engine.as_ref(), Default::default(), false, db.boxed_clone(), &genesis_header, last_hashes, primary, (3141562.into(), 31415620.into()), vec![]).unwrap();
-		let b = b.close();
-		if let Seal::Proposal(seal) = spec.engine.generate_seal(b.block()) {
-			(b, seal)
-		} else {
-			panic!()
-		}
-	}
-
-	fn vote<F>(engine: &Engine, signer: F, height: usize, view: usize, step: Step, block_hash: Option<H256>) -> Bytes where F: FnOnce(H256) -> Result<H520, ::account_provider::Error> {
-		let mi = message_info_rlp(&ViewVote::new(height, view, step), block_hash);
-		let m = message_full_rlp(&signer(mi.sha3()).unwrap().into(), &mi);
-		engine.handle_message(&m).unwrap();
-		m
-	}
-
-	fn proposal_seal(tap: &Arc<AccountProvider>, header: &Header, view: View) -> Vec<Bytes> {
-		let author = header.author();
-		let vote_info = message_info_rlp(&ViewVote::new(header.number() as Height, view, Step::Propose), Some(header.bare_hash()));
-		let signature = tap.sign(*author, None, vote_info.sha3()).unwrap();
-		vec![
-			::rlp::encode(&view).to_vec(),
-			::rlp::encode(&H520::from(signature)).to_vec(),
-			::rlp::EMPTY_LIST_RLP.to_vec()
-		]
-	}
-
-	fn insert_and_unlock(tap: &Arc<AccountProvider>, acc: &str) -> Address {
-		let addr = tap.insert_account(Secret::from_slice(&acc.sha3()).unwrap(), acc).unwrap();
-		tap.unlock_account_permanently(addr, acc.into()).unwrap();
-		addr
-	}
-
-	fn insert_and_register(tap: &Arc<AccountProvider>, engine: &Engine, acc: &str) -> Address {
-		let addr = insert_and_unlock(tap, acc);
-		engine.set_signer(tap.clone(), addr.clone(), acc.into());
-		addr
-	}
-
-	#[derive(Default)]
-	struct TestNotify {
-		messages: RwLock<Vec<Bytes>>,
-	}
-
-	impl ChainNotify for TestNotify {
-		fn broadcast(&self, data: Vec<u8>) {
-			self.messages.write().push(data);
-		}
-	}
-
-	#[test]
-	fn has_valid_metadata() {
-		let engine = Spec::new_test_tendermint().engine;
-		assert!(!engine.name().is_empty());
-		assert!(engine.version().major >= 1);
-	}
-
-	#[test]
-	fn can_return_schedule() {
-		let engine = Spec::new_test_tendermint().engine;
-		let schedule = engine.schedule(&EnvInfo {
-			number: 10000000,
-			author: 0.into(),
-			timestamp: 0,
-			difficulty: 0.into(),
-			last_hashes: Arc::new(vec![]),
-			gas_used: 0.into(),
-			gas_limit: 0.into(),
-		});
-
-		assert!(schedule.stack_limit > 0);
-	}
-
-	#[test]
-	fn verification_fails_on_short_seal() {
-		let engine = Spec::new_test_tendermint().engine;
-		let header = Header::default();
-
-		let verify_result = engine.verify_block_basic(&header, None);
-
-		match verify_result {
-			Err(Error::Block(BlockError::InvalidSealArity(_))) => {},
-			Err(_) => { panic!("should be block seal-arity mismatch error (got {:?})", verify_result); },
-			_ => { panic!("Should be error, got Ok"); },
-		}
-	}
-
-	#[test]
-	fn allows_correct_primary() {
-		let (spec, tap) = setup();
-		let engine = spec.engine;
-
-		let mut header = Header::default();
-		let validator = insert_and_unlock(&tap, "0");
-		header.set_author(validator);
-		let seal = proposal_seal(&tap, &header, 0);
-		header.set_seal(seal);
-		// Good primary.
-		assert!(engine.verify_block_unordered(&header.clone(), None).is_ok());
-
-		let validator = insert_and_unlock(&tap, "1");
-		header.set_author(validator);
-		let seal = proposal_seal(&tap, &header, 0);
-		header.set_seal(seal);
-		// Bad primary.
-		match engine.verify_block_unordered(&header, None) {
-			Err(Error::Engine(EngineError::NotProposer(_))) => {},
-			_ => panic!(),
-		}
-
-		let random = insert_and_unlock(&tap, "101");
-		header.set_author(random);
-		let seal = proposal_seal(&tap, &header, 0);
-		header.set_seal(seal);
-		// Not authority.
-		match engine.verify_block_unordered(&header, None) {
-			Err(Error::Engine(EngineError::NotAuthorized(_))) => {},
-			_ => panic!(),
-		};
-		engine.stop();
-	}
-
-	#[test]
-	fn seal_signatures_checking() {
-		let (spec, tap) = setup();
-		let engine = spec.engine;
-
-		let mut header = Header::default();
-		let primary = insert_and_unlock(&tap, "1");
-		header.set_author(primary);
-		let mut seal = proposal_seal(&tap, &header, 0);
-
-		let vote_info = message_info_rlp(&ViewVote::new(0, 0, Step::Precommit), Some(header.bare_hash()));
-		let signature1 = tap.sign(primary, None, vote_info.sha3()).unwrap();
-
-		seal[2] = ::rlp::encode(&vec![H520::from(signature1.clone())]).to_vec();
-		header.set_seal(seal.clone());
-
-		// One good signature is not enough.
-		match engine.verify_block_unordered(&header, None) {
-			Err(Error::Engine(EngineError::BadSealFieldSize(_))) => {},
-			_ => panic!(),
-		}
-
-		let voter = insert_and_unlock(&tap, "0");
-		let signature0 = tap.sign(voter, None, vote_info.sha3()).unwrap();
-
-		seal[2] = ::rlp::encode(&vec![H520::from(signature1.clone()), H520::from(signature0.clone())]).to_vec();
-		header.set_seal(seal.clone());
-
-		assert!(engine.verify_block_unordered(&header, None).is_ok());
-
-		let bad_voter = insert_and_unlock(&tap, "101");
-		let bad_signature = tap.sign(bad_voter, None, vote_info.sha3()).unwrap();
-
-		seal[2] = ::rlp::encode(&vec![H520::from(signature1), H520::from(bad_signature)]).to_vec();
-		header.set_seal(seal);
-
-		// One good and one bad signature.
-		match engine.verify_block_unordered(&header, None) {
-			Err(Error::Engine(EngineError::NotAuthorized(_))) => {},
-			_ => panic!(),
-		};
-		engine.stop();
-	}
-
-	#[test]
-	fn can_generate_seal() {
-		let (spec, tap) = setup();
-
-		let primary = insert_and_register(&tap, spec.engine.as_ref(), "1");
-
-		let (b, seal) = propose_default(&spec, primary);
-		assert!(b.lock().try_seal(spec.engine.as_ref(), seal).is_ok());
-		spec.engine.stop();
-	}
-
-	#[test]
-	fn can_recognize_proposal() {
-		let (spec, tap) = setup();
-
-		let primary = insert_and_register(&tap, spec.engine.as_ref(), "1");
-
-		let (b, seal) = propose_default(&spec, primary);
-		let sealed = b.lock().seal(spec.engine.as_ref(), seal).unwrap();
-		assert!(spec.engine.is_proposal(sealed.header()));
-		spec.engine.stop();
-	}
-
-	#[test]
-	fn relays_messages() {
-		let (spec, tap) = setup();
-		let engine = spec.engine.clone();
-
-		let v0 = insert_and_register(&tap, engine.as_ref(), "0");
-		let v1 = insert_and_register(&tap, engine.as_ref(), "1");
-
-		let h = 1;
-		let r = 0;
-
-		// Propose
-		let (b, _) = propose_default(&spec, v1.clone());
-		let proposal = Some(b.header().bare_hash());
-
-		let client = generate_dummy_client(0);
-		let notify = Arc::new(TestNotify::default());
-		client.add_notify(notify.clone());
-		engine.register_client(Arc::downgrade(&client));
-
-		let prevote_current = vote(engine.as_ref(), |mh| tap.sign(v0, None, mh).map(H520::from), h, r, Step::Prevote, proposal);
-
-		let precommit_current = vote(engine.as_ref(), |mh| tap.sign(v0, None, mh).map(H520::from), h, r, Step::Precommit, proposal);
-
-		let prevote_future = vote(engine.as_ref(), |mh| tap.sign(v0, None, mh).map(H520::from), h + 1, r, Step::Prevote, proposal);
-
-		// Relays all valid present and future messages.
-		assert!(notify.messages.read().contains(&prevote_current));
-		assert!(notify.messages.read().contains(&precommit_current));
-		assert!(notify.messages.read().contains(&prevote_future));
-		engine.stop();
-	}
-
-	#[test]
-	fn seal_submission() {
-		use ethkey::{Generator, Random};
-		use types::transaction::{Transaction, Action};
-		use client::BlockChainClient;
-
-		let tap = Arc::new(AccountProvider::transient_provider());
-		// Accounts for signing votes.
-		let v0 = insert_and_unlock(&tap, "0");
-		let v1 = insert_and_unlock(&tap, "1");
-		let client = generate_dummy_client_with_spec_and_accounts(Spec::new_test_tendermint, Some(tap.clone()));
-		let engine = client.engine();
-
-		client.miner().set_engine_signer(v1.clone(), "1".into()).unwrap();
-
-		let notify = Arc::new(TestNotify::default());
-		client.add_notify(notify.clone());
-		engine.register_client(Arc::downgrade(&client));
-
-		let keypair = Random.generate().unwrap();
-		let transaction = Transaction {
-			action: Action::Create,
-			value: U256::zero(),
-			data: "3331600055".from_hex().unwrap(),
-			gas: U256::from(100_000),
-			gas_price: U256::zero(),
-			nonce: U256::zero(),
-		}.sign(keypair.secret(), None);
-		client.miner().import_own_transaction(client.as_ref(), transaction.into()).unwrap();
-
-		// Propose
-		let proposal = Some(client.miner().pending_block().unwrap().header.bare_hash());
-		// Propose timeout
-		engine.step();
-
-		let h = 1;
-		let r = 0;
-
-		// Prevote.
-		vote(engine, |mh| tap.sign(v1, None, mh).map(H520::from), h, r, Step::Prevote, proposal);
-		vote(engine, |mh| tap.sign(v0, None, mh).map(H520::from), h, r, Step::Prevote, proposal);
-		vote(engine, |mh| tap.sign(v1, None, mh).map(H520::from), h, r, Step::Precommit, proposal);
-
-		assert_eq!(client.chain_info().best_block_number, 0);
-		// Last precommit.
-		vote(engine, |mh| tap.sign(v0, None, mh).map(H520::from), h, r, Step::Precommit, proposal);
-		assert_eq!(client.chain_info().best_block_number, 1);
-
-		engine.stop();
+		self.validators.register_contract(client);
 	}
 }

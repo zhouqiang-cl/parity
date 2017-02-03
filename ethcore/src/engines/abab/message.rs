@@ -37,15 +37,25 @@ impl Default for Vote {
 	}
 }
 
+impl Vote {
+	fn number(&self) -> usize {
+		match *self {
+			Vote::Proposal(_) => 0,
+			Vote::ViewChange => 1,
+			Vote::Vote(_) => 2,
+		}
+	}
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct ViewVote {
-	vote: Vote,
+	pub vote: Vote,
 	height: Height,
 	view: View,
 }
 
 impl ViewVote {
-	fn new_proposal(height: Height, view: View, block_hash: H256) -> Self {
+	pub fn new_proposal(height: Height, view: View, block_hash: H256) -> Self {
 		ViewVote {
 			vote: Vote::Proposal(block_hash),
 			height: height,
@@ -61,7 +71,7 @@ impl ViewVote {
 		}
 	}
 
-	fn new_view_change(height: Height, view: View) -> Self {
+	pub fn new_view_change(height: Height, view: View) -> Self {
 		ViewVote {
 			vote: Vote::ViewChange,
 			height: height,
@@ -69,16 +79,31 @@ impl ViewVote {
 		}
 	}
 
+	fn block_hash(&self) -> Option<H256> {
+		match self.vote {
+			Vote::Vote(bh) => Some(bh),
+			Vote::Proposal(bh) => Some(bh),
+			_ => None,
+		}
+	}
+
 	fn vote_hash(&self) -> H256 {
-		let rlp = encode(&ViewVote::new_vote(self.height, self.view, self.block_hash));
-		rlp.sha3()
+		encode(self).sha3()
+	}
+
+	pub fn is_height(&self, h: Height) -> bool {
+		self.height == h
+	}
+
+	pub fn is_view(&self, h: Height, v: View) -> bool {
+		self.is_height(h) && self.view == v
 	}
 }
 
 /// Message transmitted between consensus participants.
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Default)]
 pub struct AbabMessage {
-	view_vote: ViewVote,
+	pub view_vote: ViewVote,
 	signature: H520,
 }
 
@@ -93,10 +118,7 @@ impl Message for AbabMessage {
 	fn signature(&self) -> H520 { self.signature }
 
 	fn block_hash(&self) -> Option<H256> {
-		match self.view_vote.vote {
-			Vote::Vote(bh) => Some(bh),
-			_ => None,
-		}
+		self.view_vote.block_hash()
 	}
 
 	fn round(&self) -> &ViewVote { &self.view_vote }
@@ -119,7 +141,7 @@ impl AbabMessage {
 	pub fn new_view_change(signature: H520, height: Height, message_type: View) -> Self {
 		AbabMessage {
 			signature: signature,
-			view_vote: ViewVote::new_view_change(height, view),
+			view_vote: ViewVote::new_view_change(height, message_type),
 		}
 	}
 
@@ -130,10 +152,25 @@ impl AbabMessage {
 		})
 	}
 
+	pub fn verify_hash(&self, h: &H256) -> Result<Address, Error> {
+		Ok(public_to_address(&recover(&self.signature.into(), h)?))
+	}
+
 	pub fn verify(&self) -> Result<Address, Error> {
-		let vote_rlp = encode(&self.view_vote);
-		let public_key = recover(&self.signature.into(), &vote_rlp.as_raw().sha3())?;
-		Ok(public_to_address(&public_key))
+		Ok(self.verify_hash(&encode(&self.view_vote).sha3())?)
+	}
+
+	pub fn verify_raw(&self, rlp: UntrustedRlp) -> Result<Address, Error> {
+		Ok(self.verify_hash(&rlp.at(1)?.as_raw().sha3())?)
+	}
+
+	pub fn info(&self) -> BTreeMap<String, String> {
+		map![
+			"signature".into() => self.signature.to_string(),
+			"height".into() => self.view_vote.height.to_string(),
+			"view".into() => self.view_vote.view.to_string(),
+			"block_hash".into() => self.block_hash().as_ref().map(ToString::to_string).unwrap_or("".into())
+		]
 	}
 }
 
@@ -156,8 +193,7 @@ impl Ord for ViewVote {
 		} else if self.view != m.view {
 			self.view.cmp(&m.view)
 		} else {
-
-			self.step.number().cmp(&m.step.number())
+			self.vote.number().cmp(&m.vote.number())
 		}
 	}
 }
@@ -172,9 +208,9 @@ impl Decodable for AbabMessage {
 		let view = m.val_at(1)?;
 		Ok(AbabMessage {
 			signature: rlp.val_at(0)?,
-			view_vote: match m.len() {
+			view_vote: match m.iter().count() {
 				2 => ViewVote::new_view_change(height, view),
-				_ => ViewVote::new(height, view, m.val_at(2)?),
+				_ => ViewVote::new_vote(height, view, m.val_at(2)?),
 			},
 		})
   }
@@ -184,15 +220,15 @@ impl Encodable for AbabMessage {
 	fn rlp_append(&self, s: &mut RlpStream) {
 		s.begin_list(2)
 			.append(&self.signature)
-			.append_raw(&self.view_vote);
+			.append(&self.view_vote);
 	}
 }
 
 impl Encodable for ViewVote {
 	fn rlp_append(&self, s: &mut RlpStream) {
 		match self.vote {
-			Vote::Proposal(bh) => s.begin_list(4).append(&self.height).append(&self.view).append(bh).append(&true),
-			Vote::Vote(bh) => s.begin_list(3).append(&self.height).append(&self.view).append(bh),
+			Vote::Proposal(ref bh) => s.begin_list(4).append(&self.height).append(&self.view).append(bh).append(&true),
+			Vote::Vote(ref bh) => s.begin_list(3).append(&self.height).append(&self.view).append(bh),
 			Vote::ViewChange => s.begin_list(2).append(&self.height).append(&self.view),
 		};
 	}
