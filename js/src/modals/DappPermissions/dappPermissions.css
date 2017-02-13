@@ -15,12 +15,7 @@
 /* along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-.modal {
-  flex-direction: column;
-}
-
 .container {
-  margin-top: 1.5em;
   overflow-y: auto;
 }
 
@@ -36,8 +31,10 @@
   }
 }
 
-.selected, .unselected {
+.selected,
+.unselected {
   margin-bottom: 0.25em;
+  width: 100%;
 
   &:focus {
     outline: none;
@@ -65,7 +62,6 @@
 
 .legend {
   opacity: 0.75;
-  margin-top: 1em;
 
   span {
     line-height: 24px;

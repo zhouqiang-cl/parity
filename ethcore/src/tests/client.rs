@@ -29,7 +29,7 @@ use spec::Spec;
 use views::BlockView;
 use util::stats::Histogram;
 use ethkey::{KeyPair, Secret};
-use transaction::{PendingTransaction, Transaction, Action};
+use transaction::{PendingTransaction, Transaction, Action, Condition};
 use miner::MinerService;
 
 #[test]
@@ -233,6 +233,13 @@ fn empty_gas_price_histogram() {
 	assert!(client.gas_price_histogram(20, 5).is_none());
 }
 
+#[test]
+fn corpus_is_sorted() {
+	let client_result = generate_dummy_client_with_data(2, 1, slice_into![U256::from_str("11426908979").unwrap(), U256::from_str("50426908979").unwrap()]);
+	let client = client_result.reference();
+	let corpus = client.gas_price_corpus(20);
+	assert!(corpus[0] < corpus[1]);
+}
 
 #[test]
 fn can_handle_long_fork() {
@@ -299,7 +306,7 @@ fn does_not_propagate_delayed_transactions() {
 		action: Action::Call(Address::default()),
 		value: 0.into(),
 		data: Vec::new(),
-	}.sign(secret, None), Some(2));
+	}.sign(secret, None), Some(Condition::Number(2)));
 	let tx1 = PendingTransaction::new(Transaction {
 		nonce: 1.into(),
 		gas_price: 0.into(),

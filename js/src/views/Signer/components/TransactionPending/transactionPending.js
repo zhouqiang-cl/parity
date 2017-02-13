@@ -45,6 +45,7 @@ export default class TransactionPending extends Component {
     onReject: PropTypes.func.isRequired,
     store: PropTypes.object.isRequired,
     transaction: PropTypes.shape({
+      condition: PropTypes.object,
       data: PropTypes.string,
       from: PropTypes.string.isRequired,
       gas: PropTypes.object.isRequired,
@@ -59,6 +60,7 @@ export default class TransactionPending extends Component {
   };
 
   gasStore = new GasPriceEditor.Store(this.context.api, {
+    condition: this.props.transaction.condition,
     gas: this.props.transaction.gas.toFixed(),
     gasLimit: this.props.gasLimit,
     gasPrice: this.props.transaction.gasPrice.toFixed()
@@ -80,21 +82,23 @@ export default class TransactionPending extends Component {
 
   render () {
     return this.gasStore.isEditing
-      ? this.renderGasEditor()
+      ? this.renderTxEditor()
       : this.renderTransaction();
   }
 
   renderTransaction () {
     const { className, focus, id, isSending, isTest, store, transaction } = this.props;
     const { totalValue } = this.state;
+    const { balances, externalLink } = store;
     const { from, value } = transaction;
 
-    const fromBalance = store.balances[from];
+    const fromBalance = balances[from];
 
     return (
       <div className={ `${styles.container} ${className}` }>
         <TransactionMainDetails
           className={ styles.transactionDetails }
+          externalLink={ externalLink }
           from={ from }
           fromBalance={ fromBalance }
           gasStore={ this.gasStore }
@@ -115,7 +119,7 @@ export default class TransactionPending extends Component {
     );
   }
 
-  renderGasEditor () {
+  renderTxEditor () {
     const { className } = this.props;
 
     return (
@@ -133,15 +137,21 @@ export default class TransactionPending extends Component {
   onConfirm = (data) => {
     const { id, transaction } = this.props;
     const { password, wallet } = data;
-    const { gas, gasPrice } = this.gasStore.overrideTransaction(transaction);
+    const { condition, gas, gasPrice } = this.gasStore.overrideTransaction(transaction);
 
-    this.props.onConfirm({
+    const options = {
       gas,
       gasPrice,
       id,
       password,
       wallet
-    });
+    };
+
+    if (condition && (condition.block || condition.time)) {
+      options.condition = condition;
+    }
+
+    this.props.onConfirm(options);
   }
 
   onReject = () => {

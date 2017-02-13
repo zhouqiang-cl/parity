@@ -16,18 +16,20 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use rlp;
 
 use jsonrpc_core::{IoHandler, Success};
 use v1::impls::SigningQueueClient;
 use v1::metadata::Metadata;
 use v1::traits::{EthSigning, ParitySigning, Parity};
-use v1::helpers::{SignerService, SigningQueue};
+use v1::helpers::{SignerService, SigningQueue, FullDispatcher};
 use v1::types::ConfirmationResponse;
 use v1::tests::helpers::TestMinerService;
 use v1::tests::mocked::parity;
 
-use util::{Address, FixedHash, Uint, U256, ToPretty, Hashable};
+use util::{Address, FixedHash, Uint, U256, ToPretty};
+use ethkey::Secret;
 use ethcore::account_provider::AccountProvider;
 use ethcore::client::TestBlockChainClient;
 use ethcore::transaction::{Transaction, Action, SignedTransaction};
@@ -50,9 +52,12 @@ impl Default for SigningTester {
 		let miner = Arc::new(TestMinerService::default());
 		let accounts = Arc::new(AccountProvider::transient_provider());
 		let mut io = IoHandler::default();
-		let rpc = SigningQueueClient::new(&signer, &client, &miner, &accounts);
+
+		let dispatcher = FullDispatcher::new(Arc::downgrade(&client), Arc::downgrade(&miner));
+
+		let rpc = SigningQueueClient::new(&signer, dispatcher.clone(), &accounts);
 		io.extend_with(EthSigning::to_delegate(rpc));
-		let rpc = SigningQueueClient::new(&signer, &client, &miner, &accounts);
+		let rpc = SigningQueueClient::new(&signer, dispatcher, &accounts);
 		io.extend_with(ParitySigning::to_delegate(rpc));
 
 		SigningTester {
@@ -90,9 +95,17 @@ fn should_add_sign_to_queue() {
 
 	// then
 	let promise = tester.io.handle_request(&request);
-	assert_eq!(tester.signer.requests().len(), 1);
-	// respond
-	tester.signer.request_confirmed(1.into(), Ok(ConfirmationResponse::Signature(0.into())));
+
+	// the future must be polled at least once before request is queued.
+	let signer = tester.signer.clone();
+	::std::thread::spawn(move || loop {
+		if signer.requests().len() == 1 {
+			// respond
+			signer.request_confirmed(1.into(), Ok(ConfirmationResponse::Signature(0.into())));
+			break
+		}
+		::std::thread::sleep(Duration::from_millis(100))
+	});
 
 	let res = promise.wait().unwrap();
 	assert_eq!(res, Some(response.to_owned()));
@@ -186,10 +199,8 @@ fn should_sign_if_account_is_unlocked() {
 	// given
 	let tester = eth_signing();
 	let data = vec![5u8];
-	let acc = tester.accounts.new_account("test").unwrap();
+	let acc = tester.accounts.insert_account(Secret::from_slice(&[69u8; 32]).unwrap(), "test").unwrap();
 	tester.accounts.unlock_account_permanently(acc, "test".into()).unwrap();
-
-	let signature = tester.accounts.sign(acc, None, data.sha3()).unwrap();
 
 	// when
 	let request = r#"{
@@ -201,7 +212,7 @@ fn should_sign_if_account_is_unlocked() {
 		],
 		"id": 1
 	}"#;
-	let response = r#"{"jsonrpc":"2.0","result":""#.to_owned() + format!("0x{}", signature).as_ref() + r#"","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":"0x1bdb53b32e56cf3e9735377b7664d6de5a03e125b1bf8ec55715d253668b4238503b4ac931fe6af90add73e72a585e952665376b2b9afc5b6b239b7df74c734e12","id":1}"#;
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response.to_owned()));
 	assert_eq!(tester.signer.requests().len(), 0);
 }
@@ -230,9 +241,17 @@ fn should_add_transaction_to_queue() {
 
 	// then
 	let promise = tester.io.handle_request(&request);
-	assert_eq!(tester.signer.requests().len(), 1);
-	// respond
-	tester.signer.request_confirmed(1.into(), Ok(ConfirmationResponse::SendTransaction(0.into())));
+
+	// the future must be polled at least once before request is queued.
+	let signer = tester.signer.clone();
+	::std::thread::spawn(move || loop {
+		if signer.requests().len() == 1 {
+			// respond
+			signer.request_confirmed(1.into(), Ok(ConfirmationResponse::SendTransaction(0.into())));
+			break
+		}
+		::std::thread::sleep(Duration::from_millis(100))
+	});
 
 	let res = promise.wait().unwrap();
 	assert_eq!(res, Some(response.to_owned()));
@@ -277,12 +296,11 @@ fn should_add_sign_transaction_to_the_queue() {
 	let response = r#"{"jsonrpc":"2.0","result":{"#.to_owned() +
 		r#""raw":"0x"# + &rlp.to_hex() + r#"","# +
 		r#""tx":{"# +
-		r#""blockHash":null,"blockNumber":null,"creates":null,"# +
+		r#""blockHash":null,"blockNumber":null,"condition":null,"creates":null,"# +
 		&format!("\"from\":\"0x{:?}\",", &address) +
 		r#""gas":"0x76c0","gasPrice":"0x9184e72a000","# +
 		&format!("\"hash\":\"0x{:?}\",", t.hash()) +
 		r#""input":"0x","# +
-		r#""minBlock":null,"# +
 		&format!("\"networkId\":{},", t.network_id().map_or("null".to_owned(), |n| format!("{}", n))) +
 		r#""nonce":"0x1","# +
 		&format!("\"publicKey\":\"0x{:?}\",", t.public_key()) +
@@ -298,9 +316,17 @@ fn should_add_sign_transaction_to_the_queue() {
 	// then
 	tester.miner.last_nonces.write().insert(address.clone(), U256::zero());
 	let promise = tester.io.handle_request(&request);
-	assert_eq!(tester.signer.requests().len(), 1);
-	// respond
-	tester.signer.request_confirmed(1.into(), Ok(ConfirmationResponse::SignTransaction(t.into())));
+
+	// the future must be polled at least once before request is queued.
+	let signer = tester.signer.clone();
+	::std::thread::spawn(move || loop {
+		if signer.requests().len() == 1 {
+			// respond
+			signer.request_confirmed(1.into(), Ok(ConfirmationResponse::SignTransaction(t.into())));
+			break
+		}
+		::std::thread::sleep(Duration::from_millis(100))
+	});
 
 	let res = promise.wait().unwrap();
 	assert_eq!(res, Some(response.to_owned()));
@@ -362,7 +388,7 @@ fn should_decrypt_message_if_account_is_unlocked() {
 	let encrypted: Success = serde_json::from_str(&tester.io.handle_request_sync(&request).unwrap()).unwrap();
 
 	// then call decrypt
-	let request = format!("{}{:?}{}{:?}{}",
+	let request = format!("{}{:?}{}{}{}",
 		r#"{"jsonrpc": "2.0", "method": "parity_decryptMessage", "params":["0x"#,
 		address,
 		r#"","#,
@@ -393,12 +419,22 @@ fn should_add_decryption_to_the_queue() {
 	}"#;
 	let response = r#"{"jsonrpc":"2.0","result":"0x0102","id":1}"#;
 
+
 	// then
 	let promise = tester.io.handle_request(&request);
-	assert_eq!(tester.signer.requests().len(), 1);
-	// respond
-	tester.signer.request_confirmed(1.into(), Ok(ConfirmationResponse::Decrypt(vec![0x1, 0x2].into())));
 
+	// the future must be polled at least once before request is queued.
+	let signer = tester.signer.clone();
+	::std::thread::spawn(move || loop {
+		if signer.requests().len() == 1 {
+			// respond
+			signer.request_confirmed(1.into(), Ok(ConfirmationResponse::Decrypt(vec![0x1, 0x2].into())));
+			break
+		}
+		::std::thread::sleep(Duration::from_millis(100))
+	});
+
+	// check response: will deadlock if unsuccessful.
 	let res = promise.wait().unwrap();
 	assert_eq!(res, Some(response.to_owned()));
 }

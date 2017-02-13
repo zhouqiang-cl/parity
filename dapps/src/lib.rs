@@ -15,10 +15,11 @@
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Ethcore Webapplications for Parity
-//!
 #![warn(missing_docs)]
+#![cfg_attr(feature="nightly", feature(plugin))]
 #![cfg_attr(feature="nightly", plugin(clippy))]
 
+extern crate base32;
 extern crate hyper;
 extern crate time;
 extern crate url as url_lib;
@@ -44,6 +45,8 @@ extern crate parity_reactor;
 extern crate log;
 #[macro_use]
 extern crate mime;
+#[macro_use]
+extern crate serde_derive;
 
 #[cfg(test)]
 extern crate ethcore_devtools as devtools;
@@ -69,9 +72,10 @@ use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
 use std::collections::HashMap;
 
-use ethcore_rpc::Metadata;
+use ethcore_rpc::{Metadata};
 use fetch::{Fetch, Client as FetchClient};
 use hash_fetch::urlhint::ContractClient;
+use jsonrpc_core::Middleware;
 use jsonrpc_core::reactor::RpcHandler;
 use router::auth::{Authorization, NoAuth, HttpBasicAuth};
 use parity_reactor::Remote;
@@ -91,11 +95,11 @@ impl<F> SyncStatus for F where F: Fn() -> bool + Send + Sync {
 /// Validates Web Proxy tokens
 pub trait WebProxyTokens: Send + Sync {
 	/// Should return true if token is a valid web proxy access token.
-	fn is_web_proxy_token_valid(&self, token: &String) -> bool;
+	fn is_web_proxy_token_valid(&self, token: &str) -> bool;
 }
 
 impl<F> WebProxyTokens for F where F: Fn(String) -> bool + Send + Sync {
-	fn is_web_proxy_token_valid(&self, token: &String) -> bool { self(token.to_owned()) }
+	fn is_web_proxy_token_valid(&self, token: &str) -> bool { self(token.to_owned()) }
 }
 
 /// Webapps HTTP+RPC server build.
@@ -178,7 +182,7 @@ impl<T: Fetch> ServerBuilder<T> {
 
 	/// Asynchronously start server with no authentication,
 	/// returns result with `Server` handle on success or an error.
-	pub fn start_unsecured_http(self, addr: &SocketAddr, handler: RpcHandler<Metadata>) -> Result<Server, ServerError> {
+	pub fn start_unsecured_http<S: Middleware<Metadata>>(self, addr: &SocketAddr, handler: RpcHandler<Metadata, S>) -> Result<Server, ServerError> {
 		let fetch = self.fetch_client()?;
 		Server::start_http(
 			addr,
@@ -198,7 +202,7 @@ impl<T: Fetch> ServerBuilder<T> {
 
 	/// Asynchronously start server with `HTTP Basic Authentication`,
 	/// return result with `Server` handle on success or an error.
-	pub fn start_basic_auth_http(self, addr: &SocketAddr, username: &str, password: &str, handler: RpcHandler<Metadata>) -> Result<Server, ServerError> {
+	pub fn start_basic_auth_http<S: Middleware<Metadata>>(self, addr: &SocketAddr, username: &str, password: &str, handler: RpcHandler<Metadata, S>) -> Result<Server, ServerError> {
 		let fetch = self.fetch_client()?;
 		Server::start_http(
 			addr,
@@ -251,17 +255,22 @@ impl Server {
 		match signer_address {
 			Some(signer_address) => vec![
 				format!("http://{}{}", HOME_PAGE, DAPPS_DOMAIN),
-				format!("http://{}", address(signer_address)),
+				format!("http://{}{}:{}", HOME_PAGE, DAPPS_DOMAIN, signer_address.1),
+				format!("http://{}", address(&signer_address)),
+				format!("https://{}{}", HOME_PAGE, DAPPS_DOMAIN),
+				format!("https://{}{}:{}", HOME_PAGE, DAPPS_DOMAIN, signer_address.1),
+				format!("https://{}", address(&signer_address)),
+
 			],
 			None => vec![],
 		}
 	}
 
-	fn start_http<A: Authorization + 'static, F: Fetch>(
+	fn start_http<A: Authorization + 'static, F: Fetch, T: Middleware<Metadata>>(
 		addr: &SocketAddr,
 		hosts: Option<Vec<String>>,
 		authorization: A,
-		handler: RpcHandler<Metadata>,
+		handler: RpcHandler<Metadata, T>,
 		dapps_path: PathBuf,
 		extra_dapps: Vec<PathBuf>,
 		signer_address: Option<(String, u16)>,
@@ -375,7 +384,7 @@ fn random_filename() -> String {
 	rng.gen_ascii_chars().take(12).collect()
 }
 
-fn address(address: (String, u16)) -> String {
+fn address(address: &(String, u16)) -> String {
 	format!("{}:{}", address.0, address.1)
 }
 
@@ -409,6 +418,14 @@ mod util_tests {
 
 		// then
 		assert_eq!(none, Vec::<String>::new());
-		assert_eq!(some, vec!["http://home.parity".to_owned(), "http://127.0.0.1:18180".into()]);
+		assert_eq!(some, vec![
+			"http://parity.web3.site".to_owned(),
+			"http://parity.web3.site:18180".into(),
+			"http://127.0.0.1:18180".into(),
+			"https://parity.web3.site".into(),
+			"https://parity.web3.site:18180".into(),
+			"https://127.0.0.1:18180".into()
+
+		]);
 	}
 }

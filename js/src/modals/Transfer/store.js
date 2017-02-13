@@ -20,6 +20,7 @@ import { uniq } from 'lodash';
 
 import { wallet as walletAbi } from '~/contracts/abi';
 import { bytesToHex } from '~/api/util/format';
+import { fromWei } from '~/api/util/wei';
 import Contract from '~/api/contract';
 import ERRORS from './errors';
 import { ERROR_CODES } from '~/api/transport/error';
@@ -39,6 +40,8 @@ const TITLES = {
 const STAGES_BASIC = [TITLES.transfer, TITLES.sending, TITLES.complete];
 const STAGES_EXTRA = [TITLES.transfer, TITLES.extras, TITLES.sending, TITLES.complete];
 
+export const WALLET_WARNING_SPENT_TODAY_LIMIT = 'WALLET_WARNING_SPENT_TODAY_LIMIT';
+
 export default class TransferStore {
   @observable stage = 0;
   @observable extras = false;
@@ -51,9 +54,6 @@ export default class TransferStore {
 
   @observable data = '';
   @observable dataError = null;
-
-  @observable minBlock = '0';
-  @observable minBlockError = null;
 
   @observable recipient = '';
   @observable recipientError = ERRORS.requireRecipient;
@@ -68,6 +68,8 @@ export default class TransferStore {
   @observable value = '0.0';
   @observable valueError = null;
 
+  @observable walletWarning = null;
+
   account = null;
   balance = null;
   onClose = null;
@@ -77,39 +79,6 @@ export default class TransferStore {
   wallet = null;
 
   gasStore = null;
-
-  @computed get steps () {
-    const steps = [].concat(this.extras ? STAGES_EXTRA : STAGES_BASIC);
-
-    if (this.rejected) {
-      steps[steps.length - 1] = TITLES.rejected;
-    }
-
-    return steps;
-  }
-
-  @computed get isValid () {
-    const detailsValid = !this.recipientError && !this.valueError && !this.totalError && !this.senderError;
-    const extrasValid = !this.gasStore.errorGas && !this.gasStore.errorPrice && !this.minBlockError && !this.totalError;
-    const verifyValid = !this.passwordError;
-
-    switch (this.stage) {
-      case 0:
-        return detailsValid;
-
-      case 1:
-        return this.extras
-          ? extrasValid
-          : verifyValid;
-
-      case 2:
-        return verifyValid;
-    }
-  }
-
-  get token () {
-    return this.balance.tokens.find((balance) => balance.token.tag === this.tag).token;
-  }
 
   constructor (api, props) {
     this.api = api;
@@ -133,6 +102,39 @@ export default class TransferStore {
       this.sendersBalances = sendersBalances;
       this.senderError = ERRORS.requireSender;
     }
+  }
+
+  @computed get steps () {
+    const steps = [].concat(this.extras ? STAGES_EXTRA : STAGES_BASIC);
+
+    if (this.rejected) {
+      steps[steps.length - 1] = TITLES.rejected;
+    }
+
+    return steps;
+  }
+
+  @computed get isValid () {
+    const detailsValid = !this.recipientError && !this.valueError && !this.totalError && !this.senderError;
+    const extrasValid = !this.gasStore.errorGas && !this.gasStore.errorPrice && !this.gasStore.conditionBlockError && !this.totalError;
+    const verifyValid = !this.passwordError;
+
+    switch (this.stage) {
+      case 0:
+        return detailsValid;
+
+      case 1:
+        return this.extras
+          ? extrasValid
+          : verifyValid;
+
+      case 2:
+        return verifyValid;
+    }
+  }
+
+  get token () {
+    return this.balance.tokens.find((balance) => balance.token.tag === this.tag).token;
   }
 
   @action onNext = () => {
@@ -163,9 +165,6 @@ export default class TransferStore {
 
       case 'gasPrice':
         return this._onUpdateGasPrice(value);
-
-      case 'minBlock':
-        return this._onUpdateMinBlock(value);
 
       case 'recipient':
         return this._onUpdateRecipient(value);
@@ -284,14 +283,6 @@ export default class TransferStore {
     this.recalculate();
   }
 
-  @action _onUpdateMinBlock = (minBlock) => {
-    console.log('minBlock', minBlock);
-    transaction(() => {
-      this.minBlock = minBlock;
-      this.minBlockError = this._validatePositiveNumber(minBlock);
-    });
-  }
-
   @action _onUpdateGasPrice = (gasPrice) => {
     this.recalculate();
   }
@@ -344,6 +335,21 @@ export default class TransferStore {
 
     if (!valueError) {
       valueError = this._validateDecimals(value);
+    }
+
+    if (this.isWallet && !valueError) {
+      const { last, limit, spent } = this.wallet.dailylimit;
+      const remains = fromWei(limit.minus(spent));
+      const today = Math.round(Date.now() / (24 * 3600 * 1000));
+      const isResetable = last.lt(today);
+
+      if ((!isResetable && remains.lt(value)) || fromWei(limit).lt(value)) {
+        // already spent too much today
+        this.walletWarning = WALLET_WARNING_SPENT_TODAY_LIMIT;
+      } else if (this.walletWarning) {
+        // all ok
+        this.walletWarning = null;
+      }
     }
 
     transaction(() => {
@@ -590,7 +596,6 @@ export default class TransferStore {
   send () {
     const { options, values } = this._getTransferParams();
 
-    options.minBlock = new BigNumber(this.minBlock || 0).gt(0) ? this.minBlock : null;
     log.debug('@send', 'transfer value', options.value && options.value.toFormat());
 
     return this._getTransferMethod().postTransaction(options, values);
@@ -639,15 +644,12 @@ export default class TransferStore {
     const to = (isEth && !isWallet) ? this.recipient
       : (this.isWallet ? this.wallet.address : this.token.address);
 
-    const options = {
+    const options = this.gasStore.overrideTransaction({
       from: this.sender || this.account.address,
       to
-    };
+    });
 
-    if (!gas) {
-      options.gas = this.gasStore.gas;
-      options.gasPrice = this.gasStore.price;
-    } else {
+    if (gas) {
       options.gas = MAX_GAS_ESTIMATION;
     }
 

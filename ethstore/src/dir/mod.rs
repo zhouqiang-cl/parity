@@ -70,6 +70,10 @@ pub trait VaultKeyDirectoryProvider {
 	fn create(&self, name: &str, key: VaultKey) -> Result<Box<VaultKeyDirectory>, Error>;
 	/// Open existing vault with given key
 	fn open(&self, name: &str, key: VaultKey) -> Result<Box<VaultKeyDirectory>, Error>;
+	/// List all vaults
+	fn list_vaults(&self) -> Result<Vec<String>, Error>;
+	/// Get vault meta
+	fn vault_meta(&self, name: &str) -> Result<String, Error>;
 }
 
 /// Vault directory
@@ -78,8 +82,14 @@ pub trait VaultKeyDirectory: KeyDirectory {
 	fn as_key_directory(&self) -> &KeyDirectory;
 	/// Vault name
 	fn name(&self) -> &str;
+	/// Get vault key
+	fn key(&self) -> VaultKey;
 	/// Set new key for vault
-	fn set_key(&self, old_key: VaultKey, key: VaultKey) -> Result<(), SetKeyError>;
+	fn set_key(&self, key: VaultKey) -> Result<(), SetKeyError>;
+	/// Get vault meta
+	fn meta(&self) -> String;
+	/// Set vault meta
+	fn set_meta(&self, meta: &str) -> Result<(), Error>;
 }
 
 pub use self::disk::RootDiskDirectory;

@@ -14,22 +14,26 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::cmp::PartialEq;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::cmp::PartialEq;
 use std::str::FromStr;
 use std::sync::Arc;
-use util::RotatingLogger;
-use jsonrpc_core::{MetaIoHandler};
-use ethcore::miner::{Miner, ExternalMiner};
-use ethcore::client::Client;
-use ethcore::account_provider::AccountProvider;
-use ethcore::snapshot::SnapshotService;
-use ethsync::{ManageNetwork, SyncProvider};
-use ethcore_rpc::{Metadata, NetworkSettings};
+
 pub use ethcore_rpc::SignerService;
-use updater::Updater;
+
+use ethcore::account_provider::AccountProvider;
+use ethcore::client::Client;
+use ethcore::miner::{Miner, ExternalMiner};
+use ethcore::snapshot::SnapshotService;
+use ethcore_rpc::{Metadata, NetworkSettings};
+use ethcore_rpc::informant::{Middleware, RpcStats, ClientNotifier};
+use ethcore_rpc::dispatch::FullDispatcher;
+use ethsync::{ManageNetwork, SyncProvider};
 use hash_fetch::fetch::Client as FetchClient;
+use jsonrpc_core::{MetaIoHandler};
+use updater::Updater;
+use util::RotatingLogger;
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Api {
@@ -173,20 +177,27 @@ macro_rules! add_signing_methods {
 		{
 			let handler = &mut $handler;
 			let deps = &$deps;
+			let dispatcher = FullDispatcher::new(Arc::downgrade(&deps.client), Arc::downgrade(&deps.miner));
 			if deps.signer_service.is_enabled() {
-				handler.extend_with($namespace::to_delegate(SigningQueueClient::new(&deps.signer_service, &deps.client, &deps.miner, &deps.secret_store)))
+				handler.extend_with($namespace::to_delegate(SigningQueueClient::new(&deps.signer_service, dispatcher, &deps.secret_store)))
 			} else {
-				handler.extend_with($namespace::to_delegate(SigningUnsafeClient::new(&deps.client, &deps.secret_store, &deps.miner)))
+				handler.extend_with($namespace::to_delegate(SigningUnsafeClient::new(&deps.secret_store, dispatcher)))
 			}
 		}
 	}
 }
 
-pub fn setup_rpc(mut handler: MetaIoHandler<Metadata>, deps: Arc<Dependencies>, apis: ApiSet) -> MetaIoHandler<Metadata> {
+pub fn setup_rpc(stats: Arc<RpcStats>, deps: Arc<Dependencies>, apis: ApiSet) -> MetaIoHandler<Metadata, Middleware> {
 	use ethcore_rpc::v1::*;
+
+	let mut handler = MetaIoHandler::with_middleware(Middleware::new(stats, ClientNotifier {
+		client: deps.client.clone(),
+	}));
 
 	// it's turned into vector, cause ont of the cases requires &[]
 	let apis = apis.list_apis().into_iter().collect::<Vec<_>>();
+	let dispatcher = FullDispatcher::new(Arc::downgrade(&deps.client), Arc::downgrade(&deps.miner));
+
 	for api in &apis {
 		match *api {
 			Api::Web3 => {
@@ -216,10 +227,10 @@ pub fn setup_rpc(mut handler: MetaIoHandler<Metadata>, deps: Arc<Dependencies>, 
 				add_signing_methods!(EthSigning, handler, deps);
 			},
 			Api::Personal => {
-				handler.extend_with(PersonalClient::new(&deps.secret_store, &deps.client, &deps.miner, deps.geth_compatibility).to_delegate());
+				handler.extend_with(PersonalClient::new(&deps.secret_store, dispatcher.clone(), deps.geth_compatibility).to_delegate());
 			},
 			Api::Signer => {
-				handler.extend_with(SignerClient::new(&deps.secret_store, &deps.client, &deps.miner, &deps.signer_service).to_delegate());
+				handler.extend_with(SignerClient::new(&deps.secret_store, dispatcher.clone(), &deps.signer_service).to_delegate());
 			},
 			Api::Parity => {
 				let signer = match deps.signer_service.is_enabled() {
@@ -244,7 +255,7 @@ pub fn setup_rpc(mut handler: MetaIoHandler<Metadata>, deps: Arc<Dependencies>, 
 				add_signing_methods!(ParitySigning, handler, deps);
 			},
 			Api::ParityAccounts => {
-				handler.extend_with(ParityAccountsClient::new(&deps.secret_store, &deps.client).to_delegate());
+				handler.extend_with(ParityAccountsClient::new(&deps.secret_store).to_delegate());
 			},
 			Api::ParitySet => {
 				handler.extend_with(ParitySetClient::new(

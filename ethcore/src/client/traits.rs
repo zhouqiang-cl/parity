@@ -46,10 +46,6 @@ use encoded;
 /// Blockchain database client. Owns and manages a blockchain and a block queue.
 pub trait BlockChainClient : Sync + Send {
 
-	/// Should be called by any external-facing interface when actively using the client.
-	/// To minimise chatter, there's no need to call more than once every 30s.
-	fn keep_alive(&self) {}
-
 	/// Get raw block header data by block id.
 	fn block_header(&self, id: BlockId) -> Option<encoded::Header>;
 
@@ -224,6 +220,7 @@ pub trait BlockChainClient : Sync + Send {
 				let block = self.block(BlockId::Hash(h)).expect("h is either the best_block_hash or an ancestor; qed");
 				let header = block.header_view();
 				if header.number() == 0 {
+					corpus.sort();
 					return corpus;
 				}
 				block.transaction_views().iter().foreach(|t| corpus.push(t.gas_price()));

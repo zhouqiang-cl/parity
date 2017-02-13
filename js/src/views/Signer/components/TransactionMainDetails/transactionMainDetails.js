@@ -27,6 +27,7 @@ import styles from './transactionMainDetails.css';
 export default class TransactionMainDetails extends Component {
   static propTypes = {
     children: PropTypes.node,
+    externalLink: PropTypes.string.isRequired,
     from: PropTypes.string.isRequired,
     fromBalance: PropTypes.object,
     gasStore: PropTypes.object,
@@ -50,7 +51,7 @@ export default class TransactionMainDetails extends Component {
   }
 
   render () {
-    const { children, from, fromBalance, gasStore, isTest, transaction } = this.props;
+    const { children, externalLink, from, fromBalance, gasStore, isTest, transaction } = this.props;
 
     return (
       <div className={ styles.transaction }>
@@ -59,6 +60,7 @@ export default class TransactionMainDetails extends Component {
             <Account
               address={ from }
               balance={ fromBalance }
+              externalLink={ externalLink }
               isTest={ isTest }
             />
           </div>
@@ -73,14 +75,14 @@ export default class TransactionMainDetails extends Component {
                 : transaction
             }
           />
-          { this.renderEditGas() }
+          { this.renderEditTx() }
         </div>
         { children }
       </div>
     );
   }
 
-  renderEditGas () {
+  renderEditTx () {
     const { gasStore } = this.props;
 
     if (!gasStore) {
@@ -91,7 +93,7 @@ export default class TransactionMainDetails extends Component {
       <div className={ styles.editButtonRow }>
         <Button
           icon={ <MapsLocalGasStation /> }
-          label='Edit gas/gasPrice'
+          label='Edit conditions/gas/gasPrice'
           onClick={ this.toggleGasEditor }
         />
       </div>

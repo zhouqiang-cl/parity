@@ -25,7 +25,7 @@ build_rpc_trait! {
 	pub trait ParityAccounts {
 		/// Returns accounts information.
 		#[rpc(name = "parity_allAccountsInfo")]
-		fn all_accounts_info(&self) -> Result<BTreeMap<String, BTreeMap<String, String>>, Error>;
+		fn all_accounts_info(&self) -> Result<BTreeMap<H160, BTreeMap<String, String>>, Error>;
 
 		/// Creates new account from the given phrase using standard brainwallet mechanism.
 		/// Second parameter is password for the new account.
@@ -105,5 +105,41 @@ build_rpc_trait! {
 		/// Returns the accounts available for importing from Geth.
 		#[rpc(name = "parity_listGethAccounts")]
 		fn geth_accounts(&self) -> Result<Vec<H160>, Error>;
+
+		/// Create new vault.
+		#[rpc(name = "parity_newVault")]
+		fn create_vault(&self, String, String) -> Result<bool, Error>;
+
+		/// Open existing vault.
+		#[rpc(name = "parity_openVault")]
+		fn open_vault(&self, String, String) -> Result<bool, Error>;
+
+		/// Close previously opened vault.
+		#[rpc(name = "parity_closeVault")]
+		fn close_vault(&self, String) -> Result<bool, Error>;
+
+		/// List all vaults.
+		#[rpc(name = "parity_listVaults")]
+		fn list_vaults(&self) -> Result<Vec<String>, Error>;
+
+		/// List all currently opened vaults.
+		#[rpc(name = "parity_listOpenedVaults")]
+		fn list_opened_vaults(&self) -> Result<Vec<String>, Error>;
+
+		/// Change vault password.
+		#[rpc(name = "parity_changeVaultPassword")]
+		fn change_vault_password(&self, String, String) -> Result<bool, Error>;
+
+		/// Change vault of the given address.
+		#[rpc(name = "parity_changeVault")]
+		fn change_vault(&self, H160, String) -> Result<bool, Error>;
+
+		/// Get vault metadata string.
+		#[rpc(name = "parity_getVaultMeta")]
+		fn get_vault_meta(&self, String) -> Result<String, Error>;
+
+		/// Set vault metadata string.
+		#[rpc(name = "parity_setVaultMeta")]
+		fn set_vault_meta(&self, String, String) -> Result<bool, Error>;
 	}
 }

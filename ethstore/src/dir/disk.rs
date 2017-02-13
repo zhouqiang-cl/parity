@@ -21,7 +21,7 @@ use time;
 use {json, SafeAccount, Error};
 use json::Uuid;
 use super::{KeyDirectory, VaultKeyDirectory, VaultKeyDirectoryProvider, VaultKey};
-use super::vault::VaultDiskDirectory;
+use super::vault::{VAULT_FILE_NAME, VaultDiskDirectory};
 
 const IGNORED_FILES: &'static [&'static str] = &[
 	"thumbs.db",
@@ -158,7 +158,7 @@ impl<T> DiskDirectory<T> where T: KeyFileManager {
 		Ok(account)
 	}
 
-	/// Get key file manager
+	/// Get key file manager referece
 	pub fn key_manager(&self) -> &T {
 		&self.key_manager
 	}
@@ -193,7 +193,7 @@ impl<T> KeyDirectory for DiskDirectory<T> where T: KeyFileManager {
 		// and find entry with given address
 		let to_remove = self.files()?
 			.into_iter()
-			.find(|&(_, ref acc)| acc == account);
+			.find(|&(_, ref acc)| acc.id == account.id && acc.address == account.address);
 
 		// remove it
 		match to_remove {
@@ -219,6 +219,25 @@ impl<T> VaultKeyDirectoryProvider for DiskDirectory<T> where T: KeyFileManager {
 		let vault_dir = VaultDiskDirectory::at(&self.path, name, key)?;
 		Ok(Box::new(vault_dir))
 	}
+
+	fn list_vaults(&self) -> Result<Vec<String>, Error> {
+		Ok(fs::read_dir(&self.path)?
+			.filter_map(|e| e.ok().map(|e| e.path()))
+			.filter_map(|path| {
+				let mut vault_file_path = path.clone();
+				vault_file_path.push(VAULT_FILE_NAME);
+				if vault_file_path.is_file() {
+					path.file_name().and_then(|f| f.to_str()).map(|f| f.to_owned())
+				} else {
+					None
+				}
+			})
+			.collect())
+	}
+
+	fn vault_meta(&self, name: &str) -> Result<String, Error> {
+		VaultDiskDirectory::meta_at(&self.path, name)
+	}
 }
 
 impl KeyFileManager for DiskKeyFileManager {
@@ -227,7 +246,12 @@ impl KeyFileManager for DiskKeyFileManager {
 		Ok(SafeAccount::from_file(key_file, filename))
 	}
 
-	fn write<T>(&self, account: SafeAccount, writer: &mut T) -> Result<(), Error> where T: io::Write {
+	fn write<T>(&self, mut account: SafeAccount, writer: &mut T) -> Result<(), Error> where T: io::Write {
+		// when account is moved back to root directory from vault
+		// => remove vault field from meta
+		account.meta = json::remove_vault_name_from_json_meta(&account.meta)
+			.map_err(|err| Error::Custom(format!("{:?}", err)))?;
+
 		let key_file: json::KeyFile = account.into();
 		key_file.write(writer).map_err(|e| Error::Custom(format!("{:?}", e)))
 	}
@@ -240,6 +264,7 @@ mod test {
 	use dir::{KeyDirectory, VaultKey};
 	use account::SafeAccount;
 	use ethkey::{Random, Generator};
+	use devtools::RandomTempPath;
 
 	#[test]
 	fn should_create_new_account() {
@@ -294,5 +319,21 @@ mod test {
 
 		// cleanup
 		let _ = fs::remove_dir_all(dir);
+	}
+
+	#[test]
+	fn should_list_vaults() {
+		// given
+		let temp_path = RandomTempPath::new();
+		let directory = RootDiskDirectory::create(&temp_path).unwrap();
+		let vault_provider = directory.as_vault_provider().unwrap();
+		vault_provider.create("vault1", VaultKey::new("password1", 1)).unwrap();
+		vault_provider.create("vault2", VaultKey::new("password2", 1)).unwrap();
+
+		// then
+		let vaults = vault_provider.list_vaults().unwrap();
+		assert_eq!(vaults.len(), 2);
+		assert!(vaults.iter().any(|v| &*v == "vault1"));
+		assert!(vaults.iter().any(|v| &*v == "vault2"));
 	}
 }

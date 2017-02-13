@@ -16,8 +16,8 @@
 
 //! Ethcore rpc.
 #![warn(missing_docs)]
-#![cfg_attr(feature="nightly", feature(custom_derive, custom_attribute, plugin))]
-#![cfg_attr(feature="nightly", plugin(serde_macros, clippy))]
+#![cfg_attr(feature="nightly", feature(plugin))]
+#![cfg_attr(feature="nightly", plugin(clippy))]
 
 extern crate semver;
 extern crate rustc_serialize;
@@ -33,6 +33,7 @@ extern crate ethcrypto as crypto;
 extern crate ethstore;
 extern crate ethsync;
 extern crate ethash;
+extern crate ethcore_light as light;
 extern crate transient_hashmap;
 extern crate jsonrpc_ipc_server as ipc;
 extern crate ethcore_ipc;
@@ -40,6 +41,7 @@ extern crate time;
 extern crate rlp;
 extern crate fetch;
 extern crate futures;
+extern crate order_stat;
 extern crate parity_updater as updater;
 extern crate parity_reactor;
 
@@ -49,6 +51,8 @@ extern crate log;
 extern crate ethcore_util as util;
 #[macro_use]
 extern crate jsonrpc_macros;
+#[macro_use]
+extern crate serde_derive;
 
 #[cfg(test)]
 extern crate ethjson;
@@ -63,16 +67,16 @@ use jsonrpc_core::reactor::RpcHandler;
 pub use ipc::{Server as IpcServer, Error as IpcServerError};
 pub use jsonrpc_http_server::{ServerBuilder, Server, RpcServerError};
 pub mod v1;
-pub use v1::{SigningQueue, SignerService, ConfirmationsQueue, NetworkSettings, Metadata, Origin};
+pub use v1::{SigningQueue, SignerService, ConfirmationsQueue, NetworkSettings, Metadata, Origin, informant, dispatch};
 pub use v1::block_import::is_major_importing;
 
 /// Start http server asynchronously and returns result with `Server` handle on success or an error.
-pub fn start_http<M: jsonrpc_core::Metadata>(
+pub fn start_http<M: jsonrpc_core::Metadata, S: jsonrpc_core::Middleware<M>>(
 	addr: &SocketAddr,
 	cors_domains: Option<Vec<String>>,
 	allowed_hosts: Option<Vec<String>>,
 	panic_handler: Arc<PanicHandler>,
-	handler: RpcHandler<M>,
+	handler: RpcHandler<M, S>,
 ) -> Result<Server, RpcServerError> {
 
 	let cors_domains = cors_domains.map(|domains| {
@@ -95,7 +99,10 @@ pub fn start_http<M: jsonrpc_core::Metadata>(
 }
 
 /// Start ipc server asynchronously and returns result with `Server` handle on success or an error.
-pub fn start_ipc<M: jsonrpc_core::Metadata>(addr: &str, handler: RpcHandler<M>) -> Result<ipc::Server<M>, ipc::Error> {
+pub fn start_ipc<M: jsonrpc_core::Metadata, S: jsonrpc_core::Middleware<M>>(
+	addr: &str,
+	handler: RpcHandler<M, S>,
+) -> Result<ipc::Server<M, S>, ipc::Error> {
 	let server = ipc::Server::with_rpc_handler(addr, handler)?;
 	server.run_async()?;
 	Ok(server)

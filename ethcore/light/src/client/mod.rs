@@ -22,7 +22,7 @@ use ethcore::client::ClientReport;
 use ethcore::ids::BlockId;
 use ethcore::header::Header;
 use ethcore::verification::queue::{self, HeaderQueue};
-use ethcore::transaction::PendingTransaction;
+use ethcore::transaction::{PendingTransaction, Condition as TransactionCondition};
 use ethcore::blockchain_info::BlockChainInfo;
 use ethcore::spec::Spec;
 use ethcore::service::ClientIoMessage;
@@ -107,10 +107,14 @@ impl Client {
 
 	/// Fetch a vector of all pending transactions.
 	pub fn ready_transactions(&self) -> Vec<PendingTransaction> {
-		let best_num = self.chain.best_block().number;
+		let best = self.chain.best_header();
 		self.tx_pool.lock()
 			.values()
-			.filter(|t| t.min_block.as_ref().map_or(true, |x| x <= &best_num))
+			.filter(|t| match t.condition {
+				Some(TransactionCondition::Number(x)) => x <= best.number(),
+				Some(TransactionCondition::Timestamp(x)) => x <= best.timestamp(),
+				None => true,
+			})
 			.cloned()
 			.collect()
 	}
@@ -125,16 +129,19 @@ impl Client {
 
 	/// Get the chain info.
 	pub fn chain_info(&self) -> BlockChainInfo {
-		let best_block = self.chain.best_block();
+		let best_hdr = self.chain.best_header();
+		let best_td = self.chain.best_block().total_difficulty;
+
 		let first_block = self.chain.first_block();
 		let genesis_hash = self.chain.genesis_hash();
 
 		BlockChainInfo {
-			total_difficulty: best_block.total_difficulty,
-			pending_total_difficulty: best_block.total_difficulty + self.queue.total_difficulty(),
+			total_difficulty: best_td,
+			pending_total_difficulty: best_td + self.queue.total_difficulty(),
 			genesis_hash: genesis_hash,
-			best_block_hash: best_block.hash,
-			best_block_number: best_block.number,
+			best_block_hash: best_hdr.hash(),
+			best_block_number: best_hdr.number(),
+			best_block_timestamp: best_hdr.timestamp(),
 			ancient_block_hash: if first_block.is_some() { Some(genesis_hash) } else { None },
 			ancient_block_number: if first_block.is_some() { Some(0) } else { None },
 			first_block_hash: first_block.as_ref().map(|first| first.hash),
@@ -148,8 +155,8 @@ impl Client {
 	}
 
 	/// Get a block header by Id.
-	pub fn get_header(&self, id: BlockId) -> Option<Bytes> {
-		self.chain.get_header(id)
+	pub fn block_header(&self, id: BlockId) -> Option<encoded::Header> {
+		self.chain.block_header(id)
 	}
 
 	/// Flush the header queue.
@@ -173,7 +180,7 @@ impl Client {
 		for verified_header in self.queue.drain(MAX) {
 			let (num, hash) = (verified_header.number(), verified_header.hash());
 
-			match self.chain.insert(::rlp::encode(&verified_header).to_vec()) {
+			match self.chain.insert(verified_header) {
 				Ok(()) => {
 					good.push(hash);
 					self.report.write().blocks_imported += 1;
@@ -245,7 +252,7 @@ impl Provider for Client {
 	}
 
 	fn block_header(&self, id: BlockId) -> Option<encoded::Header> {
-		self.chain.get_header(id).map(encoded::Header::new)
+		Client::block_header(self, id)
 	}
 
 	fn block_body(&self, _id: BlockId) -> Option<encoded::Body> {

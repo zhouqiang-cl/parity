@@ -22,7 +22,7 @@ import { api } from '../parity';
 
 import styles from './transaction.css';
 
-import IdentityIcon from '../../githubhint/IdentityIcon';
+import IdentityIcon from '../IdentityIcon';
 
 class BaseTransaction extends Component {
   shortHash (hash) {
@@ -259,7 +259,7 @@ export class LocalTransaction extends BaseTransaction {
       to: transaction.to,
       nonce: transaction.nonce,
       value: transaction.value,
-      data: transaction.data,
+      data: transaction.input,
       gasPrice, gas
     };
 

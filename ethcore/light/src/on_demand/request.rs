@@ -21,7 +21,7 @@ use ethcore::encoded;
 use ethcore::receipt::Receipt;
 
 use rlp::{RlpStream, Stream, UntrustedRlp, View};
-use util::{Address, Bytes, HashDB, H256};
+use util::{Address, Bytes, HashDB, H256, U256};
 use util::memorydb::MemoryDB;
 use util::sha3::Hashable;
 use util::trie::{Trie, TrieDB, TrieError};
@@ -37,7 +37,7 @@ pub enum Error {
 	BadProof,
 	/// Wrong header number.
 	WrongNumber(u64, u64),
-	/// Wrong header hash.
+	/// Wrong hash.
 	WrongHash(H256, H256),
 	/// Wrong trie root.
 	WrongTrieRoot(H256, H256),
@@ -59,31 +59,44 @@ impl From<Box<TrieError>> for Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderByNumber {
 	/// The header's number.
-	pub num: u64,
+	num: u64,
+	/// The cht number for the given block number.
+	cht_num: u64,
 	/// The root of the CHT containing this header.
-	pub cht_root: H256,
+	cht_root: H256,
 }
 
 impl HeaderByNumber {
+	/// Construct a new header-by-number request. Fails if the given number is 0.
+	/// Provide the expected CHT root to compare against.
+	pub fn new(num: u64, cht_root: H256) -> Option<Self> {
+		::cht::block_to_cht_number(num).map(|cht_num| HeaderByNumber {
+			num: num,
+			cht_num: cht_num,
+			cht_root: cht_root,
+		})
+	}
+
+	/// Access the requested block number.
+	pub fn num(&self) -> u64 { self.num }
+
+	/// Access the CHT number.
+	pub fn cht_num(&self) -> u64 { self.cht_num }
+
+	/// Access the expected CHT root.
+	pub fn cht_root(&self) -> H256 { self.cht_root }
+
 	/// Check a response with a header and cht proof.
-	pub fn check_response(&self, header: &[u8], proof: &[Bytes]) -> Result<encoded::Header, Error> {
-		use util::trie::{Trie, TrieDB};
-
-		// check the proof
-		let mut db = MemoryDB::new();
-
-		for node in proof { db.insert(&node[..]); }
-		let key = ::rlp::encode(&self.num);
-
-		let expected_hash: H256 = match TrieDB::new(&db, &self.cht_root).and_then(|t| t.get(&*key))? {
-			Some(val) => ::rlp::decode(&val),
-			None => return Err(Error::BadProof)
+	pub fn check_response(&self, header: &[u8], proof: &[Bytes]) -> Result<(encoded::Header, U256), Error> {
+		let (expected_hash, td) = match ::cht::check_proof(proof, self.num, self.cht_root) {
+			Some((expected_hash, td)) => (expected_hash, td),
+			None => return Err(Error::BadProof),
 		};
 
 		// and compare the hash to the found header.
 		let found_hash = header.sha3();
 		match expected_hash == found_hash {
-			true => Ok(encoded::Header::new(header.to_vec())),
+			true => Ok((encoded::Header::new(header.to_vec()), td)),
 			false => Err(Error::WrongHash(expected_hash, found_hash)),
 		}
 	}
@@ -114,6 +127,15 @@ pub struct Body {
 }
 
 impl Body {
+	/// Create a request for a block body from a given header.
+	pub fn new(header: encoded::Header) -> Self {
+		let hash = header.hash();
+		Body {
+			header: header,
+			hash: hash,
+		}
+	}
+
 	/// Check a response for this block body.
 	pub fn check_response(&self, body: &[u8]) -> Result<encoded::Block, Error> {
 		let body_view = UntrustedRlp::new(&body);
@@ -187,55 +209,72 @@ impl Account {
 	}
 }
 
+/// Request for account code.
+pub struct Code {
+	/// Block hash, number pair.
+	pub block_id: (H256, u64),
+	/// Address requested.
+	pub address: Address,
+	/// Account's code hash.
+	pub code_hash: H256,
+}
+
+impl Code {
+	/// Check a response with code against the code hash.
+	pub fn check_response(&self, code: &[u8]) -> Result<(), Error> {
+		let found_hash = code.sha3();
+		if found_hash == self.code_hash {
+			Ok(())
+		} else {
+			Err(Error::WrongHash(self.code_hash, found_hash))
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use util::{MemoryDB, Address, H256, FixedHash};
-	use util::trie::{Trie, TrieMut, TrieDB, SecTrieDB, TrieDBMut, SecTrieDBMut};
+	use util::trie::{Trie, TrieMut, SecTrieDB, SecTrieDBMut};
 	use util::trie::recorder::Recorder;
 
+	use ethcore::client::{BlockChainClient, TestBlockChainClient, EachBlockWith};
 	use ethcore::header::Header;
 	use ethcore::encoded;
 	use ethcore::receipt::Receipt;
 
 	#[test]
+	fn no_invalid_header_by_number() {
+		assert!(HeaderByNumber::new(0, Default::default()).is_none())
+	}
+
+	#[test]
 	fn check_header_by_number() {
-		let mut root = H256::default();
-		let mut db = MemoryDB::new();
-		let mut header = Header::new();
-		header.set_number(10_000);
-		header.set_extra_data(b"test_header".to_vec());
+		use ::cht;
 
-		{
-			let mut trie = TrieDBMut::new(&mut db, &mut root);
-			for i in (0..2048u64).map(|x| x + 8192) {
-				let hash = if i == 10_000 {
-					header.hash()
-				} else {
-					H256::random()
-				};
-				trie.insert(&*::rlp::encode(&i), &*::rlp::encode(&hash)).unwrap();
-			}
-		}
+		let test_client = TestBlockChainClient::new();
+		test_client.add_blocks(10500, EachBlockWith::Nothing);
 
-		let proof = {
-			let trie = TrieDB::new(&db, &root).unwrap();
-			let key = ::rlp::encode(&10_000u64);
-			let mut recorder = Recorder::new();
+		let cht = {
+			let fetcher = |id| {
+				let hdr = test_client.block_header(id).unwrap();
+				let td = test_client.block_total_difficulty(id).unwrap();
+				Some(cht::BlockInfo {
+					hash: hdr.hash(),
+					parent_hash: hdr.parent_hash(),
+					total_difficulty: td,
+				})
+			};
 
-			trie.get_with(&*key, &mut recorder).unwrap().unwrap();
-
-			recorder.drain().into_iter().map(|r| r.data).collect::<Vec<_>>()
+			cht::build(cht::block_to_cht_number(10_000).unwrap(), fetcher).unwrap()
 		};
 
-		let req = HeaderByNumber {
-			num: 10_000,
-			cht_root: root,
-		};
+		let proof = cht.prove(10_000, 0).unwrap().unwrap();
+		let req = HeaderByNumber::new(10_000, cht.root()).unwrap();
 
-		let raw_header = ::rlp::encode(&header);
+		let raw_header = test_client.block_header(::ethcore::ids::BlockId::Number(10_000)).unwrap();
 
-		assert!(req.check_response(&*raw_header, &proof[..]).is_ok());
+		assert!(req.check_response(&raw_header.into_inner(), &proof[..]).is_ok());
 	}
 
 	#[test]
@@ -333,5 +372,18 @@ mod tests {
 		};
 
 		assert!(req.check_response(&proof[..]).is_ok());
+	}
+
+	#[test]
+	fn check_code() {
+		let code = vec![1u8; 256];
+		let req = Code {
+			block_id: (Default::default(), 2),
+			address: Default::default(),
+			code_hash: ::util::Hashable::sha3(&code),
+		};
+
+		assert!(req.check_response(&code).is_ok());
+		assert!(req.check_response(&[]).is_err());
 	}
 }

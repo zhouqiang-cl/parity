@@ -21,7 +21,7 @@ mod stores;
 use self::stores::{AddressBook, DappsSettingsStore, NewDappsPolicy};
 
 use std::fmt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Instant, Duration};
 use util::RwLock;
 use ethstore::{SimpleSecretStore, SecretStore, Error as SSError, EthStore, EthMultiStore,
@@ -29,6 +29,7 @@ use ethstore::{SimpleSecretStore, SecretStore, Error as SSError, EthStore, EthMu
 use ethstore::dir::MemoryDirectory;
 use ethstore::ethkey::{Address, Message, Public, Secret, Random, Generator};
 use ethjson::misc::AccountMeta;
+use hardware_wallet::{Error as HardwareError, HardwareWalletManager, KeyPath};
 pub use ethstore::ethkey::Signature;
 
 /// Type of unlock.
@@ -55,6 +56,10 @@ struct AccountData {
 pub enum SignError {
 	/// Account is not unlocked
 	NotUnlocked,
+	/// Account does not exist.
+	NotFound,
+	/// Low-level hardware device error.
+	Hardware(HardwareError),
 	/// Low-level error from store
 	SStore(SSError)
 }
@@ -63,8 +68,16 @@ impl fmt::Display for SignError {
 	fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
 		match *self {
 			SignError::NotUnlocked => write!(f, "Account is locked"),
+			SignError::NotFound => write!(f, "Account does not exist"),
+			SignError::Hardware(ref e) => write!(f, "{}", e),
 			SignError::SStore(ref e) => write!(f, "{}", e),
 		}
+	}
+}
+
+impl From<HardwareError> for SignError {
+	fn from(e: HardwareError) -> Self {
+		SignError::Hardware(e)
 	}
 }
 
@@ -107,17 +120,47 @@ pub struct AccountProvider {
 	sstore: Box<SecretStore>,
 	/// Accounts unlocked with rolling tokens
 	transient_sstore: EthMultiStore,
+	/// Accounts in hardware wallets.
+	hardware_store: Option<HardwareWalletManager>,
+}
+
+/// Account management settings.
+pub struct AccountProviderSettings {
+	/// Enable hardware wallet support.
+	pub enable_hardware_wallets: bool,
+	/// Use the classic chain key on the hardware wallet.
+	pub hardware_wallet_classic_key: bool,
+}
+
+impl Default for AccountProviderSettings {
+	fn default() -> Self {
+		AccountProviderSettings {
+			enable_hardware_wallets: false,
+			hardware_wallet_classic_key: false,
+		}
+	}
 }
 
 impl AccountProvider {
 	/// Creates new account provider.
-	pub fn new(sstore: Box<SecretStore>) -> Self {
+	pub fn new(sstore: Box<SecretStore>, settings: AccountProviderSettings) -> Self {
+		let mut hardware_store = None;
+		if settings.enable_hardware_wallets {
+			match HardwareWalletManager::new() {
+				Ok(manager) => {
+					manager.set_key_path(if settings.hardware_wallet_classic_key { KeyPath::EthereumClassic } else { KeyPath::Ethereum });
+					hardware_store = Some(manager)
+				},
+				Err(e) => warn!("Error initializing hardware wallets: {}", e),
+			}
+		}
 		AccountProvider {
 			unlocked: RwLock::new(HashMap::new()),
-			address_book: RwLock::new(AddressBook::new(sstore.local_path().into())),
-			dapps_settings: RwLock::new(DappsSettingsStore::new(sstore.local_path().into())),
+			address_book: RwLock::new(AddressBook::new(&sstore.local_path())),
+			dapps_settings: RwLock::new(DappsSettingsStore::new(&sstore.local_path())),
 			sstore: sstore,
 			transient_sstore: transient_sstore(),
+			hardware_store: hardware_store,
 		}
 	}
 
@@ -129,6 +172,7 @@ impl AccountProvider {
 			dapps_settings: RwLock::new(DappsSettingsStore::transient()),
 			sstore: Box::new(EthStore::open(Box::new(MemoryDirectory::default())).expect("MemoryDirectory load always succeeds; qed")),
 			transient_sstore: transient_sstore(),
+			hardware_store: None,
 		}
 	}
 
@@ -176,6 +220,12 @@ impl AccountProvider {
 		Ok(accounts.into_iter().map(|a| a.address).collect())
 	}
 
+	/// Returns addresses of hardware accounts.
+	pub fn hardware_accounts(&self) -> Result<Vec<Address>, Error> {
+		let accounts = self.hardware_store.as_ref().map_or(Vec::new(), |h| h.list_wallets());
+		Ok(accounts.into_iter().map(|a| a.address).collect())
+	}
+
 	/// Sets a whitelist of accounts exposed for unknown dapps.
 	/// `None` means that all accounts will be visible.
 	pub fn set_new_dapps_whitelist(&self, accounts: Option<Vec<Address>>) -> Result<(), Error> {
@@ -216,7 +266,7 @@ impl AccountProvider {
 			Some(accounts) => Ok(accounts),
 			None => match dapps.policy() {
 				NewDappsPolicy::AllAccounts => self.accounts(),
-				NewDappsPolicy::Whitelist(accounts) => Ok(accounts),
+				NewDappsPolicy::Whitelist(accounts) => self.filter_addresses(accounts),
 			}
 		}
 	}
@@ -231,83 +281,119 @@ impl AccountProvider {
 
 	/// Sets addresses visile for dapp.
 	pub fn set_dapps_addresses(&self, dapp: DappId, addresses: Vec<Address>) -> Result<(), Error> {
+		let addresses = self.filter_addresses(addresses)?;
 		self.dapps_settings.write().set_accounts(dapp, addresses);
 		Ok(())
 	}
 
-	/// Returns each address along with metadata.
-	pub fn addresses_info(&self) -> Result<HashMap<Address, AccountMeta>, Error> {
-		Ok(self.address_book.read().get())
+	/// Removes addresses that are neither accounts nor in address book.
+	fn filter_addresses(&self, addresses: Vec<Address>) -> Result<Vec<Address>, Error> {
+		let valid = self.addresses_info().into_iter()
+			.map(|(address, _)| address)
+			.chain(self.accounts()?)
+			.collect::<HashSet<_>>();
+
+		Ok(addresses.into_iter()
+			.filter(|a| valid.contains(&a))
+			.collect()
+		)
 	}
 
 	/// Returns each address along with metadata.
-	pub fn set_address_name(&self, account: Address, name: String) -> Result<(), Error> {
-		Ok(self.address_book.write().set_name(account, name))
+	pub fn addresses_info(&self) -> HashMap<Address, AccountMeta> {
+		self.address_book.read().get()
 	}
 
 	/// Returns each address along with metadata.
-	pub fn set_address_meta(&self, account: Address, meta: String) -> Result<(), Error> {
-		Ok(self.address_book.write().set_meta(account, meta))
+	pub fn set_address_name(&self, account: Address, name: String) {
+		self.address_book.write().set_name(account, name)
+	}
+
+	/// Returns each address along with metadata.
+	pub fn set_address_meta(&self, account: Address, meta: String) {
+		self.address_book.write().set_meta(account, meta)
 	}
 
 	/// Removes and address from the addressbook
-	pub fn remove_address(&self, addr: Address) -> Result<(), Error> {
-		Ok(self.address_book.write().remove(addr))
+	pub fn remove_address(&self, addr: Address) {
+		self.address_book.write().remove(addr)
 	}
 
 	/// Returns each account along with name and meta.
 	pub fn accounts_info(&self) -> Result<HashMap<Address, AccountMeta>, Error> {
-		let r: HashMap<Address, AccountMeta> = self.sstore.accounts()?
+		let r = self.sstore.accounts()?
 			.into_iter()
 			.map(|a| (a.address.clone(), self.account_meta(a.address).ok().unwrap_or_default()))
 			.collect();
 		Ok(r)
 	}
 
+	/// Returns each hardware account along with name and meta.
+	pub fn hardware_accounts_info(&self) -> Result<HashMap<Address, AccountMeta>, Error> {
+		let r = self.hardware_accounts()?
+			.into_iter()
+			.map(|address| (address.clone(), self.account_meta(address).ok().unwrap_or_default()))
+			.collect();
+		Ok(r)
+	}
+
+	/// Returns each hardware account along with name and meta.
+	pub fn is_hardware_address(&self, address: Address) -> bool {
+		self.hardware_store.as_ref().and_then(|s| s.wallet_info(&address)).is_some()
+	}
+
 	/// Returns each account along with name and meta.
 	pub fn account_meta(&self, address: Address) -> Result<AccountMeta, Error> {
-		let account = StoreAccountRef::root(address);
-		Ok(AccountMeta {
-			name: self.sstore.name(&account)?,
-			meta: self.sstore.meta(&account)?,
-			uuid: self.sstore.uuid(&account).ok().map(Into::into),	// allowed to not have a Uuid
-		})
+		if let Some(info) = self.hardware_store.as_ref().and_then(|s| s.wallet_info(&address)) {
+			Ok(AccountMeta {
+				name: info.name,
+				meta: info.manufacturer,
+				uuid: None,
+			})
+		} else {
+			let account = self.sstore.account_ref(&address)?;
+			Ok(AccountMeta {
+				name: self.sstore.name(&account)?,
+				meta: self.sstore.meta(&account)?,
+				uuid: self.sstore.uuid(&account).ok().map(Into::into),	// allowed to not have a Uuid
+			})
+		}
 	}
 
 	/// Returns each account along with name and meta.
 	pub fn set_account_name(&self, address: Address, name: String) -> Result<(), Error> {
-		self.sstore.set_name(&StoreAccountRef::root(address), name)?;
+		self.sstore.set_name(&self.sstore.account_ref(&address)?, name)?;
 		Ok(())
 	}
 
 	/// Returns each account along with name and meta.
 	pub fn set_account_meta(&self, address: Address, meta: String) -> Result<(), Error> {
-		self.sstore.set_meta(&StoreAccountRef::root(address), meta)?;
+		self.sstore.set_meta(&self.sstore.account_ref(&address)?, meta)?;
 		Ok(())
 	}
 
 	/// Returns `true` if the password for `account` is `password`. `false` if not.
 	pub fn test_password(&self, address: &Address, password: &str) -> Result<bool, Error> {
-		self.sstore.test_password(&StoreAccountRef::root(address.clone()), password)
+		self.sstore.test_password(&self.sstore.account_ref(&address)?, password)
 			.map_err(Into::into)
 	}
 
 	/// Permanently removes an account.
 	pub fn kill_account(&self, address: &Address, password: &str) -> Result<(), Error> {
-		self.sstore.remove_account(&StoreAccountRef::root(address.clone()), &password)?;
+		self.sstore.remove_account(&self.sstore.account_ref(&address)?, &password)?;
 		Ok(())
 	}
 
 	/// Changes the password of `account` from `password` to `new_password`. Fails if incorrect `password` given.
-	pub fn change_password(&self, account: &Address, password: String, new_password: String) -> Result<(), Error> {
-		self.sstore.change_password(&StoreAccountRef::root(account.clone()), &password, &new_password)
+	pub fn change_password(&self, address: &Address, password: String, new_password: String) -> Result<(), Error> {
+		self.sstore.change_password(&self.sstore.account_ref(address)?, &password, &new_password)
 	}
 
 	/// Helper method used for unlocking accounts.
 	fn unlock_account(&self, address: Address, password: String, unlock: Unlock) -> Result<(), Error> {
 		// verify password by signing dump message
 		// result may be discarded
-		let account = StoreAccountRef::root(address);
+		let account = self.sstore.account_ref(&address)?;
 		let _ = self.sstore.sign(&account, &password, &Default::default())?;
 
 		// check if account is already unlocked pernamently, if it is, do nothing
@@ -360,20 +446,21 @@ impl AccountProvider {
 	/// Checks if given account is unlocked
 	pub fn is_unlocked(&self, address: Address) -> bool {
 		let unlocked = self.unlocked.read();
-		let account = StoreAccountRef::root(address);
-		unlocked.get(&account).is_some()
+		self.sstore.account_ref(&address)
+			.map(|r| unlocked.get(&r).is_some())
+			.unwrap_or(false)
 	}
 
 	/// Signs the message. If password is not provided the account must be unlocked.
 	pub fn sign(&self, address: Address, password: Option<String>, message: Message) -> Result<Signature, SignError> {
-		let account = StoreAccountRef::root(address);
+		let account = self.sstore.account_ref(&address)?;
 		let password = password.map(Ok).unwrap_or_else(|| self.password(&account))?;
 		Ok(self.sstore.sign(&account, &password, &message)?)
 	}
 
 	/// Signs given message with supplied token. Returns a token to use in next signing within this session.
 	pub fn sign_with_token(&self, address: Address, token: AccountToken, message: Message) -> Result<(Signature, AccountToken), SignError> {
-		let account = StoreAccountRef::root(address);
+		let account = self.sstore.account_ref(&address)?;
 		let is_std_password = self.sstore.test_password(&account, &token)?;
 
 		let new_token = random_string(16);
@@ -396,7 +483,7 @@ impl AccountProvider {
 	pub fn decrypt_with_token(&self, address: Address, token: AccountToken, shared_mac: &[u8], message: &[u8])
 		-> Result<(Vec<u8>, AccountToken), SignError>
 	{
-		let account = StoreAccountRef::root(address);
+		let account = self.sstore.account_ref(&address)?;
 		let is_std_password = self.sstore.test_password(&account, &token)?;
 
 		let new_token = random_string(16);
@@ -417,7 +504,7 @@ impl AccountProvider {
 
 	/// Decrypts a message. If password is not provided the account must be unlocked.
 	pub fn decrypt(&self, address: Address, password: Option<String>, shared_mac: &[u8], message: &[u8]) -> Result<Vec<u8>, SignError> {
-		let account = StoreAccountRef::root(address);
+		let account = self.sstore.account_ref(&address)?;
 		let password = password.map(Ok).unwrap_or_else(|| self.password(&account))?;
 		Ok(self.sstore.decrypt(&account, &password, shared_mac, message)?)
 	}
@@ -432,6 +519,72 @@ impl AccountProvider {
 		self.sstore.import_geth_accounts(SecretVaultRef::Root, desired, testnet)
 			.map(|a| a.into_iter().map(|a| a.address).collect())
 			.map_err(Into::into)
+	}
+
+	/// Create new vault.
+	pub fn create_vault(&self, name: &str, password: &str) -> Result<(), Error> {
+		self.sstore.create_vault(name, password)
+			.map_err(Into::into)
+	}
+
+	/// Open existing vault.
+	pub fn open_vault(&self, name: &str, password: &str) -> Result<(), Error> {
+		self.sstore.open_vault(name, password)
+			.map_err(Into::into)
+	}
+
+	/// Close previously opened vault.
+	pub fn close_vault(&self, name: &str) -> Result<(), Error> {
+		self.sstore.close_vault(name)
+			.map_err(Into::into)
+	}
+
+	/// List all vaults
+	pub fn list_vaults(&self) -> Result<Vec<String>, Error> {
+		self.sstore.list_vaults()
+			.map_err(Into::into)
+	}
+
+	/// List all currently opened vaults
+	pub fn list_opened_vaults(&self) -> Result<Vec<String>, Error> {
+		self.sstore.list_opened_vaults()
+			.map_err(Into::into)
+	}
+
+	/// Change vault password.
+	pub fn change_vault_password(&self, name: &str, new_password: &str) -> Result<(), Error> {
+		self.sstore.change_vault_password(name, new_password)
+			.map_err(Into::into)
+	}
+
+	/// Change vault of the given address.
+	pub fn change_vault(&self, address: Address, new_vault: &str) -> Result<(), Error> {
+		let new_vault_ref = if new_vault.is_empty() { SecretVaultRef::Root } else { SecretVaultRef::Vault(new_vault.to_owned()) };
+		let old_account_ref = self.sstore.account_ref(&address)?;
+		self.sstore.change_account_vault(new_vault_ref, old_account_ref)
+			.map_err(Into::into)
+			.map(|_| ())
+	}
+
+	/// Get vault metadata string.
+	pub fn get_vault_meta(&self, name: &str) -> Result<String, Error> {
+		self.sstore.get_vault_meta(name)
+			.map_err(Into::into)
+	}
+
+	/// Set vault metadata string.
+	pub fn set_vault_meta(&self, name: &str, meta: &str) -> Result<(), Error> {
+		self.sstore.set_vault_meta(name, meta)
+			.map_err(Into::into)
+	}
+
+	/// Sign transaction with hardware wallet.
+	pub fn sign_with_hardware(&self, address: Address, transaction: &[u8]) -> Result<Signature, SignError> {
+		match self.hardware_store.as_ref().map(|s| s.sign_transaction(&address, transaction)) {
+			None | Some(Err(HardwareError::KeyNotFound)) => Err(SignError::NotFound),
+			Some(Err(e)) => Err(From::from(e)),
+			Some(Ok(s)) => Ok(s),
+		}
 	}
 }
 
@@ -502,9 +655,12 @@ mod tests {
 		let app = DappId("app1".into());
 		// set `AllAccounts` policy
 		ap.set_new_dapps_whitelist(None).unwrap();
+		// add accounts to address book
+		ap.set_address_name(1.into(), "1".into());
+		ap.set_address_name(2.into(), "2".into());
 
 		// when
-		ap.set_dapps_addresses(app.clone(), vec![1.into(), 2.into()]).unwrap();
+		ap.set_dapps_addresses(app.clone(), vec![1.into(), 2.into(), 3.into()]).unwrap();
 
 		// then
 		assert_eq!(ap.dapps_addresses(app.clone()).unwrap(), vec![1.into(), 2.into()]);
@@ -515,6 +671,7 @@ mod tests {
 		// given
 		let ap = AccountProvider::transient_provider();
 		let address = ap.new_account("test").unwrap();
+		ap.set_address_name(1.into(), "1".into());
 
 		// When returning nothing
 		ap.set_new_dapps_whitelist(Some(vec![])).unwrap();
@@ -523,6 +680,10 @@ mod tests {
 		// change to all
 		ap.set_new_dapps_whitelist(None).unwrap();
 		assert_eq!(ap.dapps_addresses("app1".into()).unwrap(), vec![address]);
+
+		// change to non-existent account
+		ap.set_new_dapps_whitelist(Some(vec![2.into()])).unwrap();
+		assert_eq!(ap.dapps_addresses("app1".into()).unwrap(), vec![]);
 
 		// change to a whitelist
 		ap.set_new_dapps_whitelist(Some(vec![1.into()])).unwrap();
