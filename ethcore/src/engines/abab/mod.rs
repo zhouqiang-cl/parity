@@ -210,8 +210,18 @@ impl Abab {
 		match message.view_vote.vote {
 			Vote::Vote(hash) if self.is_primary() && self.has_enough_votes(message) => {
 				// Commit the block using a complete signature set.
-				if let Some(block_hash) = *self.proposal.read() {
+				let maybe_proposal = self.votes.round_signatures(ViewVote::new_proposal(height, view), hash).get(0);
+				if let (Some(block_hash), Some(proposal)) = (*self.proposal.read(), maybe_proposal) {
 					// Generate seal and remove old votes.
+					let new_view = self.votes.round_signatures(ViewVote::new_view_change(height, view), hash);
+					let votes = self.votes.round_signatures(message.view_vote, hash);
+					self.votes.throw_out_old(&votes);
+					Seal::Proposal(vec![
+						::rlp::encode(&view).to_vec(),
+						::rlp::encode(&signature).to_vec(),
+						::rlp::encode(&new_view).to_vec(),
+						::rlp::encode(&votes).to_vec()
+					])
 				}		
 			},
 			Vote::ViewChange if self.is_view_primary(height, view) && self.is_new_view(message.view_vote.view) => {
@@ -283,11 +293,11 @@ impl Engine for Abab {
 			self.votes.vote(AbabMessage { signature: signature, message: proposal }, author);
 			// Remember proposal for later seal submission.
 			*self.proposal.write() = Some(bh);
-			let signatures = self.votes.seal_signatures(proposal, ViewVote::new_view_change(height, view), bh);
+			let new_view = self.votes.round_signatures(ViewVote::new_view_change(proposal_step.height, proposal_step.view), bh);
 			Seal::Proposal(vec![
 				::rlp::encode(&view).to_vec(),
-				::rlp::encode(&signatures.proposal).to_vec(),
-				::rlp::encode(&signatures.votes).to_vec(),
+				::rlp::encode(&signature).to_vec(),
+				::rlp::encode(&new_view).to_vec(),
 				::rlp::EMPTY_LIST_RLP.to_vec()
 			])
 		} else {
