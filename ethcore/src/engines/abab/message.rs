@@ -87,8 +87,12 @@ impl ViewVote {
 		}
 	}
 
-	fn vote_hash(&self) -> H256 {
-		encode(self).sha3()
+	pub fn vote_hash(&self) -> H256 {
+		encode(&ViewVote::new_vote(self.height, self.view, self.block_hash().unwrap_or_else(Default::default))).sha3()
+	}
+
+	pub fn view_change_hash(&self) -> H256 {
+		encode(&ViewVote::new_view_change(self.height, self.view)).sha3()
 	}
 
 	pub fn is_height(&self, h: Height) -> bool {
@@ -97,6 +101,14 @@ impl ViewVote {
 
 	pub fn is_view(&self, h: Height, v: View) -> bool {
 		self.is_height(h) && self.view == v
+	}
+
+	pub fn is_first_view(&self) -> bool {
+		self.view == 0
+	}
+
+	pub fn to_view_change(&self) -> Self {
+		ViewVote::new_view_change(self.height, self.view)
 	}
 }
 
