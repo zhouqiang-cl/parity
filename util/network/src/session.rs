@@ -407,7 +407,7 @@ impl Session {
 				let rlp = UntrustedRlp::new(&packet.data[1..]);
 				let reason: u8 = rlp.val_at(0)?;
 				if self.had_hello {
-					debug!("Disconnected: {}: {:?}", self.token(), DisconnectReason::from_u8(reason));
+					debug!(target:"network", "Disconnected: {}: {:?}", self.token(), DisconnectReason::from_u8(reason));
 				}
 				Err(From::from(NetworkError::Disconnect(DisconnectReason::from_u8(reason))))
 			}
