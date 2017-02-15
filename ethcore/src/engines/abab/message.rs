@@ -129,9 +129,7 @@ impl Message for AbabMessage {
 
 	fn signature(&self) -> H520 { self.signature }
 
-	fn block_hash(&self) -> Option<H256> {
-		self.view_vote.block_hash()
-	}
+	fn block_hash(&self) -> Option<H256> { self.view_vote.block_hash() }
 
 	fn round(&self) -> &ViewVote { &self.view_vote }
 
@@ -164,6 +162,14 @@ impl AbabMessage {
 		})
 	}
 
+	pub fn height(&self) -> Height {
+		self.view_vote.height
+	}
+
+	pub fn view(&self) -> View {
+		self.view_vote.view
+	}
+
 	pub fn verify_hash(&self, h: &H256) -> Result<Address, Error> {
 		Ok(public_to_address(&recover(&self.signature.into(), h)?))
 	}
@@ -172,7 +178,7 @@ impl AbabMessage {
 		Ok(self.verify_hash(&encode(&self.view_vote).sha3())?)
 	}
 
-	pub fn verify_raw(&self, rlp: UntrustedRlp) -> Result<Address, Error> {
+	pub fn verify_raw(&self, rlp: &UntrustedRlp) -> Result<Address, Error> {
 		Ok(self.verify_hash(&rlp.at(1)?.as_raw().sha3())?)
 	}
 

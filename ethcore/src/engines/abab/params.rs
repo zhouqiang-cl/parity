@@ -66,7 +66,10 @@ impl From<ethjson::spec::AbabParams> for AbabParams {
 			validators: p.validators,
 			timeout: p.timeout.map_or_else(
 				Default::default,
-				|ms| AbabTimeout(Duration::milliseconds(U256::from(ms) as i64))
+				|raw_ms| {
+					let ms: usize = raw_ms.into();
+					AbabTimeout(Duration::milliseconds(ms as i64))
+				}
 			),
 			block_reward: p.block_reward.map_or_else(U256::zero, Into::into),
 		}

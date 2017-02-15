@@ -41,7 +41,7 @@ use io::IoService;
 use super::signer::EngineSigner;
 use super::validator_set::{ValidatorSet, new_validator_set};
 use super::transition::TransitionHandler;
-use super::vote_collector::VoteCollector;
+use super::vote_collector::{VoteCollector, Message};
 use self::message::*;
 use self::params::AbabParams;
 
@@ -213,7 +213,7 @@ impl Abab {
 	}
 
 	fn is_new_view(&self, view: View) -> bool {
-		self.is_above_third(self.votes.count_aligned_votes(&AbabMessage::new_view_change(Default::default(), self.height.load(AtomicOrdering::SeqCst), view))).is_ok()
+		self.view.load(AtomicOrdering::SeqCst) < view && self.is_above_third(self.votes.count_aligned_votes(&AbabMessage::new_view_change(Default::default(), self.height.load(AtomicOrdering::SeqCst), view))).is_ok()
 	}
 
 	fn set_timeout(&self) {
@@ -230,8 +230,8 @@ impl Abab {
 		match message.view_vote.vote {
 			Vote::Vote(hash) if self.is_primary() && self.has_enough_votes(message) => {
 				// Commit the block using a complete signature set.
-				let maybe_proposal = self.votes.round_signatures(&ViewVote::new_proposal(height, view, hash), &hash).get(0);
-				if let (Some(block_hash), Some(proposal)) = (*self.proposal.read(), maybe_proposal) {
+				let proposals = self.votes.round_signatures(&ViewVote::new_proposal(height, view, hash), &hash);
+				if let (Some(block_hash), Some(proposal)) = (*self.proposal.read(), proposals.get(0)) {
 					// Generate seal and remove old votes.
 					let new_view = self.votes.round_signatures(&ViewVote::new_view_change(height, view), &hash);
 					let votes = self.votes.round_signatures(&message.view_vote, &hash);
@@ -246,7 +246,7 @@ impl Abab {
 					Seal::None
 				}
 			},
-			Vote::ViewChange if self.is_view_primary(height, view) && self.is_new_view(message.view_vote.view) => {
+			Vote::ViewChange if self.is_view_primary(height, view) && self.is_new_view(message.view()) => {
 				// Generate a block in the new view.
 				self.new_view();
 				self.update_sealing();
@@ -313,7 +313,7 @@ impl Engine for Abab {
 		if let Ok(signature) = self.signer.sign(::rlp::encode(&proposal).sha3()).map(Into::into) {
 			// Insert Propose vote.
 			debug!(target: "engine", "Submitting proposal {} at height {} view {}.", bh, height, view);
-			self.votes.vote(AbabMessage { signature: signature, view_vote: proposal }, author);
+			self.votes.vote(AbabMessage::new(signature, proposal), author);
 			// Remember proposal for later seal submission.
 			*self.proposal.write() = Some(bh);
 			let new_view = self.votes.round_signatures(&ViewVote::new_view_change(height, view), &bh);
@@ -333,7 +333,7 @@ impl Engine for Abab {
 		let rlp = UntrustedRlp::new(rlp);
 		let message: AbabMessage = rlp.as_val()?;
 		if !self.votes.is_old_or_known(&message) {
-			let sender = message.verify_raw(rlp)?;
+			let sender = message.verify_raw(&rlp)?;
 			if !self.is_validator(&sender) {
 				Err(EngineError::NotAuthorized(sender))?;
 			}
@@ -383,7 +383,7 @@ impl Engine for Abab {
 	fn verify_block_unordered(&self, header: &Header, _block: Option<&[u8]>) -> Result<(), Error> {
 		let proposal = AbabMessage::new_proposal(header)?;
 		let primary = proposal.verify()?;
-		let correct_primary = self.view_primary(proposal.view_vote.height, proposal.view_vote.view);
+		let correct_primary = self.view_primary(proposal.height(), proposal.view());
 		if correct_primary != primary {
 			Err(EngineError::NotProposer(Mismatch { expected: correct_primary, found: primary }))?
 		}
@@ -405,7 +405,7 @@ impl Engine for Abab {
 			let mut view_change_count = 0;
 			let mut new_view_origins = HashSet::new();
 			for rlp in UntrustedRlp::new(new_view_field).iter() {
-				let view_change: AbabMessage = AbabMessage::new(rlp.as_val()?, &proposal.view_vote.to_view_change());
+				let view_change: AbabMessage = AbabMessage::new(rlp.as_val()?, proposal.view_vote.to_view_change());
 				let address = match self.votes.get(&view_change) {
 					Some(a) => a,
 					None => view_change.verify_hash(&view_change_hash)?,
@@ -433,7 +433,7 @@ impl Engine for Abab {
 			let mut signature_count = 0;
 			let mut origins = HashSet::new();
 			for rlp in UntrustedRlp::new(votes_field).iter() {
-				let vote: AbabMessage = AbabMessage::new(&proposal, rlp.as_val()?);
+				let vote: AbabMessage = AbabMessage::new_vote(rlp.as_val()?, proposal.height(), proposal.view(), header.bare_hash());
 				let address = match self.votes.get(&vote) {
 					Some(a) => a,
 					None => vote.verify_hash(&vote_hash)?,
@@ -482,19 +482,18 @@ impl Engine for Abab {
 		let signatures_len = header.seal()[3].len();
 		// Signatures have to be an empty list rlp.
 		let proposal = AbabMessage::new_proposal(header).expect("block went through full verification; this Engine verifies new_proposal creation; qed");
-		let view_vote = proposal.view_vote;
 		if signatures_len != 1 {
 			// New Commit received, skip to next height.
-			self.to_next_height(view_vote.height);
+			self.to_next_height(proposal.height());
 			if self.is_view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) {
 				self.update_sealing()
 			}
 			return false;
 		}
 		let primary = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
-		debug!(target: "engine", "Received a new proposal {:?} from {}.", view_vote, primary);
+		debug!(target: "engine", "Received a new proposal {:?} from {}.", proposal.view_vote, primary);
 		if self.is_view(&proposal) {
-			*self.proposal.write() = Some(view_vote.block_hash.clone());
+			*self.proposal.write() = proposal.block_hash();
 			self.transition.send_message(());
 		}
 		self.votes.vote(proposal, &primary);
