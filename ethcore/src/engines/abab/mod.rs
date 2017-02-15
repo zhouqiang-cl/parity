@@ -20,7 +20,7 @@ mod message;
 mod params;
 
 use std::sync::Weak;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use util::*;
 use client::{Client, EngineClient};
 use error::{Error, BlockError};
@@ -28,26 +28,22 @@ use header::Header;
 use builtin::Builtin;
 use env_info::EnvInfo;
 use rlp::{UntrustedRlp, View as RlpView};
-use ethkey::{recover, public_to_address};
 use account_provider::AccountProvider;
 use block::*;
 use spec::CommonParams;
 use engines::{Engine, Seal, EngineError};
-use blockchain::extras::BlockDetails;
-use views::HeaderView;
 use evm::Schedule;
 use state::CleanupMode;
 use io::IoService;
 use super::signer::EngineSigner;
 use super::validator_set::{ValidatorSet, new_validator_set};
 use super::transition::TransitionHandler;
-use super::vote_collector::{VoteCollector, Message};
+use super::vote_collector::VoteCollector;
 use self::message::*;
 use self::params::AbabParams;
 
 pub type Height = usize;
 pub type View = usize;
-pub type BlockHash = H256;
 
 /// Engine using `Abab` consensus algorithm, suitable for EVM chain.
 pub struct Abab {
@@ -66,7 +62,7 @@ pub struct Abab {
 	/// Used to sign messages and proposals.
 	signer: EngineSigner,
 	/// Bare hash of the proposed block, used for seal submission.
-	proposal: RwLock<Option<H256>>,
+	proposed: AtomicBool,
 	/// Set used to determine the current validators.
 	validators: Box<ValidatorSet + Send + Sync>,
 }
@@ -86,7 +82,7 @@ impl Abab {
 				view: AtomicUsize::new(0),
 				votes: VoteCollector::default(),
 				signer: Default::default(),
-				proposal: RwLock::new(None),
+				proposed: AtomicBool::new(false),
 				validators: new_validator_set(our_params.validators),
 			});
 		let handler = TransitionHandler::new(Arc::downgrade(&engine) as Weak<Engine>, Box::new(our_params.timeout));
@@ -98,14 +94,6 @@ impl Abab {
 		if let Some(ref weak) = *self.client.read() {
 			if let Some(c) = weak.upgrade() {
 				c.update_sealing();
-			}
-		}
-	}
-
-	fn submit_seal(&self, block_hash: H256, seal: Vec<Bytes>) {
-		if let Some(ref weak) = *self.client.read() {
-			if let Some(c) = weak.upgrade() {
-				c.submit_seal(block_hash, seal);
 			}
 		}
 	}
@@ -143,10 +131,12 @@ impl Abab {
 	}
 
 	fn to_next_height(&self, height: Height) {
+		self.set_timeout();
 		let new_height = height + 1;
 		debug!(target: "engine", "Received a Commit, transitioning to height {}.", new_height);
 		self.height.store(new_height, AtomicOrdering::SeqCst);
 		self.view.store(0, AtomicOrdering::SeqCst);
+		self.proposed.store(false, AtomicOrdering::SeqCst);
 	}
 
 	fn is_validator(&self, address: &Address) -> bool {
@@ -204,7 +194,9 @@ impl Abab {
 
 	fn new_view(&self) {
 		trace!(target: "engine", "New view.");
+		self.set_timeout();
 		self.view.fetch_add(1, AtomicOrdering::SeqCst);
+		self.proposed.store(false, AtomicOrdering::SeqCst);
 	}
 
 	fn has_enough_votes(&self, message: &AbabMessage) -> bool {
@@ -220,6 +212,7 @@ impl Abab {
 		if let Err(io_err) = self.transition.send_message(()) {
 			warn!(target: "engine", "Could not set a new view timeout: {}", io_err)
 		}
+		self.broadcast_old_messages();
 	}
 
 	fn handle_valid_message(&self, message: &AbabMessage) {
@@ -228,10 +221,10 @@ impl Abab {
 		let view = self.view.load(AtomicOrdering::SeqCst);
 		let height = self.height.load(AtomicOrdering::SeqCst);
 		match message.view_vote.vote {
-			Vote::Vote(hash) if self.is_primary() && self.has_enough_votes(message) => {
+			Vote::Vote(hash) if self.proposed.load(AtomicOrdering::SeqCst) && self.is_primary() && self.has_enough_votes(message) => {
 				// Commit the block using a complete signature set.
 				let proposals = self.votes.round_signatures(&ViewVote::new_proposal(height, view, hash), &hash);
-				if let (Some(block_hash), Some(proposal)) = (*self.proposal.read(), proposals.get(0)) {
+				if let Some(proposal) = proposals.get(0) {
 					// Generate seal and remove old votes.
 					let new_view = self.votes.round_signatures(&ViewVote::new_view_change(height, view), &hash);
 					let votes = self.votes.round_signatures(&message.view_vote, &hash);
@@ -302,7 +295,7 @@ impl Engine for Abab {
 		let header = block.header();
 		let author = header.author();
 		// Only primary can generate seal if None was generated.
-		if !self.is_primary() || self.proposal.read().is_some() {
+		if !self.is_primary() || self.proposed.load(AtomicOrdering::SeqCst) {
 			return Seal::None;
 		}
 
@@ -315,7 +308,7 @@ impl Engine for Abab {
 			debug!(target: "engine", "Submitting proposal {} at height {} view {}.", bh, height, view);
 			self.votes.vote(AbabMessage::new(signature, proposal), author);
 			// Remember proposal for later seal submission.
-			*self.proposal.write() = Some(bh);
+			self.proposed.store(true, AtomicOrdering::SeqCst);
 			let new_view = self.votes.round_signatures(&ViewVote::new_view_change(height, view), &bh);
 			Seal::Proposal(vec![
 				::rlp::encode(&view).to_vec(),
@@ -484,17 +477,18 @@ impl Engine for Abab {
 		let proposal = AbabMessage::new_proposal(header).expect("block went through full verification; this Engine verifies new_proposal creation; qed");
 		if signatures_len != 1 {
 			// New Commit received, skip to next height.
-			self.to_next_height(proposal.height());
-			if self.is_view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) {
-				self.update_sealing()
+			if proposal.height() > self.height.load(AtomicOrdering::SeqCst) {
+				self.to_next_height(proposal.height());
+				if self.is_view_primary(self.height.load(AtomicOrdering::SeqCst), self.view.load(AtomicOrdering::SeqCst)) {
+					self.update_sealing()
+				}
 			}
 			return false;
 		}
 		let primary = proposal.verify().expect("block went through full verification; this Engine tries verify; qed");
 		debug!(target: "engine", "Received a new proposal {:?} from {}.", proposal.view_vote, primary);
 		if self.is_view(&proposal) {
-			*self.proposal.write() = proposal.block_hash();
-			self.transition.send_message(());
+			self.proposed.store(true, AtomicOrdering::SeqCst);
 		}
 		self.votes.vote(proposal, &primary);
 		true

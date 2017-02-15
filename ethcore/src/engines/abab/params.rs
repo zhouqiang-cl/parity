@@ -54,11 +54,6 @@ impl Timeouts<()> for AbabTimeout {
 	}
 }
 
-fn to_duration(ms: ethjson::uint::Uint) -> Duration {
-	let ms: usize = ms.into();
-	Duration::milliseconds(ms as i64)
-}
-
 impl From<ethjson::spec::AbabParams> for AbabParams {
 	fn from(p: ethjson::spec::AbabParams) -> Self {
 		AbabParams {

@@ -17,10 +17,10 @@
 //! Tendermint message handling.
 
 use util::*;
-use super::{Height, View, BlockHash};
+use super::{Height, View};
 use error::Error;
 use header::Header;
-use rlp::{Rlp, UntrustedRlp, RlpStream, Stream, Encodable, Decodable, Decoder, DecoderError, View as RlpView, encode};
+use rlp::{UntrustedRlp, RlpStream, Stream, Encodable, Decodable, Decoder, DecoderError, View as RlpView, encode};
 use ethkey::{recover, public_to_address};
 use super::super::vote_collector::Message;
 
@@ -256,4 +256,70 @@ pub fn message_rlp(signature: &H520, vote_info: &Bytes) -> Bytes {
 	let mut s = RlpStream::new_list(2);
 	s.append(signature).append_raw(vote_info, 1);
 	s.out()
+}
+
+#[cfg(test)]
+mod tests {
+	use util::*;
+	use rlp::*;
+	use ethkey::Secret;
+	use account_provider::AccountProvider;
+	use header::Header;
+	use super::*;
+
+	#[test]
+	fn encode_decode() {
+		let vote = AbabMessage::new_vote(Default::default(), 10, 123, "1".sha3());
+		let raw_rlp = ::rlp::encode(&vote).to_vec();
+		let rlp = Rlp::new(&raw_rlp);
+		assert_eq!(vote, rlp.as_val());
+
+		let view_change = AbabMessage::new_view_change(Default::default(), 1, 0);
+		let raw_rlp = ::rlp::encode(&view_change).to_vec();
+		let rlp = Rlp::new(&raw_rlp);
+		assert_eq!(view_change, rlp.as_val());
+	}
+
+	#[test]
+	fn generate_and_verify() {
+		let tap = Arc::new(AccountProvider::transient_provider());
+		let addr = tap.insert_account(Secret::from_slice(&"0".sha3()).unwrap(), "0").unwrap();
+		tap.unlock_account_permanently(addr, "0".into()).unwrap();
+
+		let view_vote = ::rlp::encode(&ViewVote::new_vote(123, 2, "0".sha3())).to_vec();
+
+		let raw_rlp = message_rlp(&tap.sign(addr, None, view_vote.sha3()).unwrap().into(), &view_vote);
+
+		let rlp = UntrustedRlp::new(&raw_rlp);
+		let message: AbabMessage = rlp.as_val().unwrap();
+		match message.verify() { Ok(a) if a == addr => {}, _ => panic!(), };
+	}
+
+	#[test]
+	fn proposal_message() {
+		let mut header = Header::default();
+		let seal = vec![
+			::rlp::encode(&2u8).to_vec(),
+			::rlp::encode(&H520::default()).to_vec(),
+			Vec::new(),
+			Vec::new()
+		];
+		header.set_seal(seal);
+		let message = AbabMessage::new_proposal(&header).unwrap();
+		assert_eq!(
+			message,
+			AbabMessage::new(Default::default(), ViewVote::new_proposal(0, 2, header.bare_hash()))
+		);
+	}
+
+	#[test]
+	fn message_info_from_header() {
+		let header = Header::default();
+		let pro = AbabMessage::new(Default::default(), ViewVote::new_proposal(0, 0, header.bare_hash()));
+
+		let vc = ::rlp::encode(&ViewVote::new_view_change(0, 0));
+		assert_eq!(pro.view_vote.view_change_hash(), vc.sha3());
+		let vote = ::rlp::encode(&ViewVote::new_vote(0, 0, header.bare_hash()));
+		assert_eq!(pro.view_vote.vote_hash(), vote.sha3());
+	}
 }
