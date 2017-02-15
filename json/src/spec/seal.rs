@@ -46,8 +46,22 @@ pub struct TendermintSeal {
 	pub round: Uint,
 	/// Proposal seal signature.
 	pub proposal: H520,
-	/// Proposal seal signature.
+	/// Commit.
 	pub precommits: Vec<H520>,
+}
+
+/// Abab seal.
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct AbabSeal {
+	/// Seal view.
+	pub view: Uint,
+	/// Proposal seal signature.
+	pub proposal: H520,
+	/// Proposal seal signature.
+	#[serde(rename="newView")]
+	pub new_view: Vec<H520>,
+	/// Vote signatures.
+	pub votes: Vec<H520>,
 }
 
 /// Seal variants.
@@ -62,6 +76,9 @@ pub enum Seal {
 	/// Tendermint seal.
 	#[serde(rename="tendermint")]
 	Tendermint(TendermintSeal),
+	/// Abab seal.
+	#[serde(rename="abab")]
+	Abab(AbabSeal),
 	/// Generic seal.
 	#[serde(rename="generic")]
 	Generic(Bytes),
@@ -91,6 +108,15 @@ mod tests {
 				"round": "0x0",
 				"proposal": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 				"precommits": [
+					"0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+				]
+			}
+		},{
+			"abab": {
+				"view": "0x0",
+				"proposal": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+				"newView": [],
+				"votes": [
 					"0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 				]
 			}

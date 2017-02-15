@@ -54,6 +54,18 @@ pub struct Tendermint {
 	pub precommits: Vec<H520>,
 }
 
+/// Abab seal.
+pub struct Abab {
+	/// Seal view.
+	pub view: usize,
+	/// Proposal seal signature.
+	pub proposal: H520,
+	/// New view signatures.
+	pub new_view: Vec<H520>,
+	/// Vote signatures.
+	pub votes: Vec<H520>,
+}
+
 impl Into<Generic> for AuthorityRound {
 	fn into(self) -> Generic {
 		let mut s = RlpStream::new_list(2);
@@ -70,6 +82,14 @@ impl Into<Generic> for Tendermint {
 	}
 }
 
+impl Into<Generic> for Abab {
+	fn into(self) -> Generic {
+		let mut s = RlpStream::new_list(4);
+		s.append(&self.view).append(&self.proposal).append(&self.new_view).append(&self.votes);
+		Generic(s.out())
+	}
+}
+
 pub struct Generic(pub Vec<u8>);
 
 /// Genesis seal type.
@@ -80,6 +100,8 @@ pub enum Seal {
 	AuthorityRound(AuthorityRound),
 	/// Tendermint seal.
 	Tendermint(Tendermint),
+	/// Abab seal.
+	Abab(Abab),
 	/// Generic RLP seal.
 	Generic(Generic),
 }
@@ -100,6 +122,12 @@ impl From<ethjson::spec::Seal> for Seal {
 				proposal: tender.proposal.into(),
 				precommits: tender.precommits.into_iter().map(Into::into).collect()
 			}),
+			ethjson::spec::Seal::Abab(abab) => Seal::Abab(Abab {
+				view: abab.view.into(),
+				proposal: abab.proposal.into(),
+				new_view: abab.new_view.into_iter().map(Into::into).collect(),
+				votes: abab.votes.into_iter().map(Into::into).collect()
+			}),
 			ethjson::spec::Seal::Generic(g) => Seal::Generic(Generic(g.into())),
 		}
 	}
@@ -112,6 +140,7 @@ impl Into<Generic> for Seal {
 			Seal::Ethereum(eth) => eth.into(),
 			Seal::AuthorityRound(ar) => ar.into(),
 			Seal::Tendermint(tender) => tender.into(),
+			Seal::Abab(abab) => abab.into(),
 		}
 	}
 }

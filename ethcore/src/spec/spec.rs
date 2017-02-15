@@ -345,8 +345,12 @@ impl Spec {
 	pub fn new_test_round() -> Self { load_bundled!("authority_round") }
 
 	/// Create a new Spec with Tendermint consensus which does internal sealing (not requiring work).
-	/// Account "0".sha3() and "1".sha3() are a authorities.
+	/// Account "0".sha3() and "1".sha3() are the authorities.
 	pub fn new_test_tendermint() -> Self { load_bundled!("tendermint") }
+
+	/// Create a new Spec with Abab consensus which does internal sealing (not requiring work).
+	/// Account "0".sha3() and "1".sha3() are th authorities.
+	pub fn new_test_abab() -> Self { load_bundled!("abab") }
 
 	/// TestList.sol used in both specs: https://github.com/ethcore/contracts/pull/30/files
 	/// Accounts with secrets "0".sha3() and "1".sha3() are initially the validators.
