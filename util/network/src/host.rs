@@ -1162,7 +1162,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 				let mut connections = self.sessions.write();
 				if let Some(connection) = connections.get(stream).cloned() {
 					let c = connection.lock();
-					if c.done() { // make sure it is the same connection that the event was generated for
+					if c.expired() { // make sure it is the same connection that the event was generated for
 						c.deregister_socket(event_loop).expect("Error deregistering socket");
 						connections.remove(stream);
 					}
