@@ -27,7 +27,7 @@ let instance;
 let renderItem;
 
 function render (props = {}) {
-  renderItem = sinon.stub();
+  renderItem = sinon.stub().returns('someThing');
   component = shallow(
     <SectionList
       className='testClass'
@@ -73,10 +73,6 @@ describe('SectionList', () => {
 
       it('adds a key for the row', () => {
         expect(row.key).to.be.ok;
-      });
-
-      it('calls renderItem for the items', () => {
-        expect(instance.renderItem).to.have.been.calledTwice;
       });
     });
 

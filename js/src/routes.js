@@ -14,12 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
+import HistoryStore from '~/mobx/historyStore';
 import {
   Accounts, Account, Addresses, Address, Application,
-  Contract, Contracts, Dapp, Dapps, HistoryStore,
+  Contract, Contracts, Dapp, Dapps, Home,
   Settings, SettingsBackground, SettingsParity, SettingsProxy,
   SettingsViews, Signer, Status,
-  Wallet, Web, WriteContract
+  Vaults, Wallet, Web, WriteContract
 } from '~/views';
 import builtinDapps from '~/views/Dapps/builtin.json';
 
@@ -54,10 +55,17 @@ const accountsRoutes = [
     path: ':address',
     component: Account,
     onEnter: ({ params }) => {
-      accountsHistory.add(params.address);
+      accountsHistory.add(params.address, 'account');
     }
   },
-  { path: '/wallet/:address', component: Wallet }
+  { path: '/vaults', component: Vaults },
+  {
+    path: '/wallet/:address',
+    component: Wallet,
+    onEnter: ({ params }) => {
+      accountsHistory.add(params.address, 'wallet');
+    }
+  }
 ];
 
 const addressesRoutes = [
@@ -86,8 +94,8 @@ const routes = [
   { path: '/address/:address', onEnter: handleDeprecatedRoute },
   { path: '/contract/:address', onEnter: handleDeprecatedRoute },
 
-  { path: '/', onEnter: redirectTo('/accounts') },
-  { path: '/auth', onEnter: redirectTo('/accounts') },
+  { path: '/', onEnter: redirectTo('/home') },
+  { path: '/auth', onEnter: redirectTo('/home') },
   { path: '/settings', onEnter: redirectTo('/settings/views') }
 ];
 
@@ -127,6 +135,7 @@ const childRoutes = [
     }
   },
   { path: 'apps', component: Dapps },
+  { path: 'home', component: Home },
   { path: 'web', component: Web },
   { path: 'web/:url', component: Web },
   { path: 'signer', component: Signer }

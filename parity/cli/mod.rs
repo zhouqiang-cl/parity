@@ -96,7 +96,7 @@ usage! {
 
 		// -- Account Options
 		flag_unlock: Option<String> = None,
-			or |c: &Config| otry!(c.account).unlock.clone().map(|vec| Some(vec.join(","))),
+			or |c: &Config| otry!(c.account).unlock.as_ref().map(|vec| Some(vec.join(","))),
 		flag_password: Vec<String> = Vec::new(),
 			or |c: &Config| otry!(c.account).password.clone(),
 		flag_keys_iterations: u32 = 10240u32,
@@ -119,8 +119,8 @@ usage! {
 		flag_ui_no_validation: bool = false, or |_| None,
 
 		// -- Networking Options
-		flag_warp: bool = false,
-			or |c: &Config| otry!(c.network).warp.clone(),
+		flag_no_warp: bool = false,
+			or |c: &Config| otry!(c.network).warp.clone().map(|w| !w),
 		flag_port: u16 = 30303u16,
 			or |c: &Config| otry!(c.network).port.clone(),
 		flag_min_peers: u16 = 25u16,
@@ -138,7 +138,7 @@ usage! {
 		flag_network_id: Option<u64> = None,
 			or |c: &Config| otry!(c.network).id.clone().map(Some),
 		flag_bootnodes: Option<String> = None,
-			or |c: &Config| otry!(c.network).bootnodes.clone().map(|vec| Some(vec.join(","))),
+			or |c: &Config| otry!(c.network).bootnodes.as_ref().map(|vec| Some(vec.join(","))),
 		flag_no_discovery: bool = false,
 			or |c: &Config| otry!(c.network).discovery.map(|d| !d).clone(),
 		flag_node_key: Option<String> = None,
@@ -160,9 +160,9 @@ usage! {
 		flag_jsonrpc_cors: Option<String> = None,
 			or |c: &Config| otry!(c.rpc).cors.clone().map(Some),
 		flag_jsonrpc_apis: String = "web3,eth,net,parity,traces,rpc",
-			or |c: &Config| otry!(c.rpc).apis.clone().map(|vec| vec.join(",")),
+			or |c: &Config| otry!(c.rpc).apis.as_ref().map(|vec| vec.join(",")),
 		flag_jsonrpc_hosts: String = "none",
-			or |c: &Config| otry!(c.rpc).hosts.clone().map(|vec| vec.join(",")),
+			or |c: &Config| otry!(c.rpc).hosts.as_ref().map(|vec| vec.join(",")),
 
 		// IPC
 		flag_no_ipc: bool = false,
@@ -170,7 +170,7 @@ usage! {
 		flag_ipc_path: String = "$BASE/jsonrpc.ipc",
 			or |c: &Config| otry!(c.ipc).path.clone(),
 		flag_ipc_apis: String = "web3,eth,net,parity,parity_accounts,traces,rpc",
-			or |c: &Config| otry!(c.ipc).apis.clone().map(|vec| vec.join(",")),
+			or |c: &Config| otry!(c.ipc).apis.as_ref().map(|vec| vec.join(",")),
 
 		// DAPPS
 		flag_no_dapps: bool = false,
@@ -180,7 +180,9 @@ usage! {
 		flag_dapps_interface: String = "local",
 			or |c: &Config| otry!(c.dapps).interface.clone(),
 		flag_dapps_hosts: String = "none",
-			or |c: &Config| otry!(c.dapps).hosts.clone().map(|vec| vec.join(",")),
+			or |c: &Config| otry!(c.dapps).hosts.as_ref().map(|vec| vec.join(",")),
+		flag_dapps_cors: Option<String> = None,
+			or |c: &Config| otry!(c.dapps).cors.clone().map(Some),
 		flag_dapps_path: String = "$BASE/dapps",
 			or |c: &Config| otry!(c.dapps).path.clone(),
 		flag_dapps_user: Option<String> = None,
@@ -188,6 +190,28 @@ usage! {
 		flag_dapps_pass: Option<String> = None,
 			or |c: &Config| otry!(c.dapps).pass.clone().map(Some),
 		flag_dapps_apis_all: bool = false, or |_| None,
+
+		// Secret Store
+		flag_no_secretstore: bool = false,
+			or |c: &Config| otry!(c.secretstore).disable.clone(),
+		flag_secretstore_port: u16 = 8082u16,
+			or |c: &Config| otry!(c.secretstore).port.clone(),
+		flag_secretstore_interface: String = "local",
+			or |c: &Config| otry!(c.secretstore).interface.clone(),
+		flag_secretstore_path: String = "$BASE/secretstore",
+			or |c: &Config| otry!(c.secretstore).path.clone(),
+
+		// IPFS
+		flag_ipfs_api: bool = false,
+			or |c: &Config| otry!(c.ipfs).enable.clone(),
+		flag_ipfs_api_port: u16 = 5001u16,
+			or |c: &Config| otry!(c.ipfs).port.clone(),
+		flag_ipfs_api_interface: String = "local",
+			or |c: &Config| otry!(c.ipfs).interface.clone(),
+		flag_ipfs_api_cors: Option<String> = None,
+			or |c: &Config| otry!(c.ipfs).cors.clone().map(Some),
+		flag_ipfs_api_hosts: String = "none",
+			or |c: &Config| otry!(c.ipfs).hosts.as_ref().map(|vec| vec.join(",")),
 
 		// -- Sealing/Mining Options
 		flag_author: Option<String> = None,
@@ -233,7 +257,7 @@ usage! {
 		flag_remove_solved: bool = false,
 			or |c: &Config| otry!(c.mining).remove_solved.clone(),
 		flag_notify_work: Option<String> = None,
-			or |c: &Config| otry!(c.mining).notify_work.clone().map(|vec| Some(vec.join(","))),
+			or |c: &Config| otry!(c.mining).notify_work.as_ref().map(|vec| Some(vec.join(","))),
 		flag_refuse_service_transactions: bool = false,
 			or |c: &Config| otry!(c.mining).refuse_service_transactions.clone(),
 
@@ -251,9 +275,9 @@ usage! {
 			or |c: &Config| otry!(c.footprint).tracing.clone(),
 		flag_pruning: String = "auto",
 			or |c: &Config| otry!(c.footprint).pruning.clone(),
-		flag_pruning_history: u64 = 1200u64,
+		flag_pruning_history: u64 = 64u64,
 			or |c: &Config| otry!(c.footprint).pruning_history.clone(),
-		flag_pruning_memory: usize = 150usize,
+		flag_pruning_memory: usize = 75usize,
 			or |c: &Config| otry!(c.footprint).pruning_memory.clone(),
 		flag_cache_size_db: u32 = 64u32,
 			or |c: &Config| otry!(c.footprint).cache_size_db.clone(),
@@ -308,6 +332,7 @@ usage! {
 		// Values with optional default value.
 		flag_base_path: Option<String>, display dir::default_data_path(), or |c: &Config| otry!(c.parity).base_path.clone().map(Some),
 		flag_db_path: Option<String>, display dir::CHAINS_PATH, or |c: &Config| otry!(c.parity).db_path.clone().map(Some),
+		flag_warp: Option<bool>, display true, or |c: &Config| Some(otry!(c.network).warp.clone()),
 	}
 }
 
@@ -321,6 +346,8 @@ struct Config {
 	rpc: Option<Rpc>,
 	ipc: Option<Ipc>,
 	dapps: Option<Dapps>,
+	secretstore: Option<SecretStore>,
+	ipfs: Option<Ipfs>,
 	mining: Option<Mining>,
 	footprint: Option<Footprint>,
 	snapshots: Option<Snapshots>,
@@ -364,7 +391,6 @@ struct Ui {
 
 #[derive(Default, Debug, PartialEq, RustcDecodable)]
 struct Network {
-	disable: Option<bool>,
 	warp: Option<bool>,
 	port: Option<u16>,
 	min_peers: Option<u16>,
@@ -404,9 +430,27 @@ struct Dapps {
 	port: Option<u16>,
 	interface: Option<String>,
 	hosts: Option<Vec<String>>,
+	cors: Option<String>,
 	path: Option<String>,
 	user: Option<String>,
 	pass: Option<String>,
+}
+
+#[derive(Default, Debug, PartialEq, RustcDecodable)]
+struct SecretStore {
+	disable: Option<bool>,
+	port: Option<u16>,
+	interface: Option<String>,
+	path: Option<String>,
+}
+
+#[derive(Default, Debug, PartialEq, RustcDecodable)]
+struct Ipfs {
+	enable: Option<bool>,
+	port: Option<u16>,
+	interface: Option<String>,
+	cors: Option<String>,
+	hosts: Option<Vec<String>>,
 }
 
 #[derive(Default, Debug, PartialEq, RustcDecodable)]
@@ -482,7 +526,8 @@ struct Misc {
 mod tests {
 	use super::{
 		Args, ArgsError,
-		Config, Operating, Account, Ui, Network, Rpc, Ipc, Dapps, Mining, Footprint, Snapshots, VM, Misc
+		Config, Operating, Account, Ui, Network, Rpc, Ipc, Dapps, Ipfs, Mining, Footprint,
+		Snapshots, VM, Misc, SecretStore,
 	};
 	use toml;
 
@@ -597,7 +642,7 @@ mod tests {
 			flag_ui_no_validation: false,
 
 			// -- Networking Options
-			flag_warp: true,
+			flag_no_warp: false,
 			flag_port: 30303u16,
 			flag_min_peers: 25u16,
 			flag_max_peers: 50u16,
@@ -632,10 +677,23 @@ mod tests {
 			flag_dapps_port: 8080u16,
 			flag_dapps_interface: "local".into(),
 			flag_dapps_hosts: "none".into(),
+			flag_dapps_cors: None,
 			flag_dapps_path: "$HOME/.parity/dapps".into(),
 			flag_dapps_user: Some("test_user".into()),
 			flag_dapps_pass: Some("test_pass".into()),
 			flag_dapps_apis_all: false,
+
+			flag_no_secretstore: false,
+			flag_secretstore_port: 8082u16,
+			flag_secretstore_interface: "local".into(),
+			flag_secretstore_path: "$HOME/.parity/secretstore".into(),
+
+			// IPFS
+			flag_ipfs_api: false,
+			flag_ipfs_api_port: 5001u16,
+			flag_ipfs_api_interface: "local".into(),
+			flag_ipfs_api_cors: Some("null".into()),
+			flag_ipfs_api_hosts: "none".into(),
 
 			// -- Sealing/Mining Options
 			flag_author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
@@ -670,7 +728,7 @@ mod tests {
 			// -- Footprint Options
 			flag_tracing: "auto".into(),
 			flag_pruning: "auto".into(),
-			flag_pruning_history: 1200u64,
+			flag_pruning_history: 64u64,
 			flag_pruning_memory: 500usize,
 			flag_cache_size_db: 64u32,
 			flag_cache_size_blocks: 8u32,
@@ -726,6 +784,7 @@ mod tests {
 			flag_etherbase: None,
 			flag_extradata: None,
 			flag_cache: None,
+			flag_warp: Some(true),
 
 			// -- Miscellaneous Options
 			flag_version: false,
@@ -784,7 +843,6 @@ mod tests {
 				path: None,
 			}),
 			network: Some(Network {
-				disable: Some(false),
 				warp: Some(false),
 				port: None,
 				min_peers: Some(10),
@@ -819,8 +877,22 @@ mod tests {
 				path: None,
 				interface: None,
 				hosts: None,
+				cors: None,
 				user: Some("username".into()),
 				pass: Some("password".into())
+			}),
+			secretstore: Some(SecretStore {
+				disable: None,
+				port: Some(8082),
+				interface: None,
+				path: None,
+			}),
+			ipfs: Some(Ipfs {
+				enable: Some(false),
+				port: Some(5001),
+				interface: None,
+				cors: None,
+				hosts: None,
 			}),
 			mining: Some(Mining {
 				author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),

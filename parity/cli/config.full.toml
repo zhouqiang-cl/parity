@@ -27,7 +27,6 @@ interface = "127.0.0.1"
 path = "$HOME/.parity/signer"
 
 [network]
-disable = false
 port = 30303
 min_peers = 25
 max_peers = 50
@@ -67,6 +66,19 @@ path = "$HOME/.parity/dapps"
 user = "test_user"
 pass = "test_pass"
 
+[secretstore]
+disable = false
+port = 8082
+interface = "local"
+path = "$HOME/.parity/secretstore"
+
+[ipfs]
+enable = false
+port = 5001
+interface = "local"
+cors = "null"
+hosts = ["none"]
+
 [mining]
 author = "0xdeadbeefcafe0000000000000000000000000001"
 engine_signer = "0xdeadbeefcafe0000000000000000000000000001"
@@ -95,7 +107,7 @@ refuse_service_transactions = false
 [footprint]
 tracing = "auto"
 pruning = "auto"
-pruning_history = 1200
+pruning_history = 64
 pruning_memory = 500
 cache_size_db = 64
 cache_size_blocks = 8

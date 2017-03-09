@@ -28,7 +28,7 @@ extern crate ctrlc;
 extern crate docopt;
 extern crate env_logger;
 extern crate fdlimit;
-extern crate hyper; // for price_info.rs
+extern crate hyper;
 extern crate isatty;
 extern crate jsonrpc_core;
 extern crate num_cpus;
@@ -56,18 +56,23 @@ extern crate ethcore_signer;
 extern crate ethcore_util as util;
 extern crate ethsync;
 extern crate parity_hash_fetch as hash_fetch;
+extern crate parity_ipfs_api;
 extern crate parity_reactor;
 extern crate parity_updater as updater;
+extern crate parity_local_store as local_store;
 extern crate rpc_cli;
-
-#[cfg(feature="stratum")]
-extern crate ethcore_stratum;
-#[cfg(feature = "dapps")]
-extern crate ethcore_dapps;
-
 
 #[macro_use]
 extern crate log as rlog;
+
+#[cfg(feature="stratum")]
+extern crate ethcore_stratum;
+
+#[cfg(feature="secretstore")]
+extern crate ethcore_secretstore;
+
+#[cfg(feature = "dapps")]
+extern crate ethcore_dapps;
 
 macro_rules! dependency {
 	($dep_ty:ident, $url:expr) => {
@@ -87,6 +92,7 @@ mod cache;
 mod cli;
 mod configuration;
 mod dapps;
+mod ipfs;
 mod deprecated;
 mod dir;
 mod helpers;
@@ -100,6 +106,7 @@ mod rpc_apis;
 mod run;
 mod signer;
 mod snapshot;
+mod secretstore;
 mod upgrade;
 mod url;
 mod user_defaults;

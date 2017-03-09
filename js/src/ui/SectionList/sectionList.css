@@ -15,9 +15,13 @@
 /* along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+$transition: all 0.25s;
+$widthNormal: 33.33%;
+$widthExpanded: 42%;
+
 .section {
-  overflow-x: hidden;
   position: relative;
+  width: 100%;
 
   .overlay {
     background: rgba(0, 0, 0, 0.85);
@@ -33,52 +37,34 @@
   .row {
     display: flex;
     justify-content: center;
-    overflow-x: hidden;
 
-    /* TODO: As per JS comments, the flex-base could be adjusted in the future to allow for */
+    /* TODO: As per JS comments, the flex-base could be adjusted in the future to allow for
     /* case where <> 3 columns are required should the need arrise from a UI pov. */
     .item {
       box-sizing: border-box;
-      cursor: pointer;
       display: flex;
-      flex: 0 1 33.33%;
-      opacity: 0.75;
-      overflow-x: hidden;
+      flex: 0 1 $widthNormal;
+      opacity: 0.85;
       padding: 0.25em;
-      transition: all 0.75s cubic-bezier(0.23, 1, 0.32, 1);
 
-      /* TODO: The hover and no-hover states can be improved to not "just appear" */
-      &:not(:hover) {
-        & [data-hover="hide"] {
-        }
-
-        & [data-hover="show"] {
-          display: none;
-        }
-      }
+      /* https://www.binarymoon.co.uk/2014/02/fixing-css-transitions-in-google-chrome/ */
+      transform: translateZ(0);
+      transition: $transition;
+      width: 0;
 
       &:hover {
         opacity: 1;
         z-index: 100;
-
-        & [data-hover="hide"] {
-          display: none;
-        }
-
-        & [data-hover="show"] {
-        }
       }
+    }
 
-      &.stretch-on:hover {
-        flex: 0 0 50%;
-      }
-
-      &.stretch-off:hover {
-      }
+    .item.stretchOn:hover {
+      flex: 0 0 $widthExpanded;
+      max-width: $widthExpanded;
     }
   }
 }
 
-.section+.section {
+.section + .section {
   margin-top: 1em;
 }

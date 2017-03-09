@@ -20,7 +20,7 @@ import { parse as parseUrl } from 'url';
 
 import { encodePath, encodeUrl } from '~/util/dapplink';
 
-const DEFAULT_URL = 'https://mkr.market';
+const DEFAULT_URL = 'https://oasisdex.com';
 const LS_LAST_ADDRESS = '_parity::webLastAddress';
 
 const hasProtocol = /^https?:\/\//;
@@ -82,8 +82,31 @@ export default class Store {
     this.setNextUrl(this.currentUrl);
   }
 
-  @action setHistory = (history) => {
-    this.history = history;
+  @action setHistory = (urls) => {
+    this.history = Object
+      .keys(urls)
+      .filter((url) => url && !url.startsWith(this._api.dappsUrl) && url.indexOf('127.0.0.1') === -1)
+      .sort((urlA, urlB) => {
+        const timeA = urls[urlA].getTime();
+        const timeB = urls[urlB].getTime();
+
+        if (timeA > timeB) {
+          return -1;
+        } else if (timeA < timeB) {
+          return 1;
+        }
+
+        return 0;
+      })
+      .map((url) => {
+        const hostname = url.replace(/^http[s]?:\/\//, '').split('/')[0];
+
+        return {
+          hostname,
+          timestamp: urls[url],
+          url
+        };
+      });
   }
 
   @action setLoading = (isLoading) => {

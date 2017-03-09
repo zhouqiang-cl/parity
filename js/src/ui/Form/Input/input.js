@@ -46,6 +46,10 @@ const UNDERLINE_FOCUSED = {
 const NAME_ID = ' ';
 
 export default class Input extends Component {
+  static contextTypes = {
+    intl: React.PropTypes.object.isRequired
+  };
+
   static propTypes = {
     allowCopy: PropTypes.oneOfType([
       PropTypes.string,
@@ -68,6 +72,7 @@ export default class Input extends Component {
     onBlur: PropTypes.func,
     onChange: PropTypes.func,
     onClick: PropTypes.func,
+    onDefaultAction: PropTypes.func,
     onFocus: PropTypes.func,
     onKeyDown: PropTypes.func,
     onSubmit: PropTypes.func,
@@ -78,7 +83,8 @@ export default class Input extends Component {
     style: PropTypes.object,
     value: PropTypes.oneOfType([
       PropTypes.number,
-      PropTypes.string
+      PropTypes.string,
+      PropTypes.node
     ])
   };
 
@@ -134,6 +140,13 @@ export default class Input extends Component {
       ? UNDERLINE_FOCUSED
       : readOnly && typeof focused !== 'boolean' ? { display: 'none' } : null;
 
+    const textValue = typeof value !== 'string' && (value && value.props)
+      ? this.context.intl.formatMessage(
+          value.props,
+          value.props.values || {}
+        )
+      : value;
+
     return (
       <div className={ styles.container } style={ style }>
         { this.renderCopyButton() }
@@ -168,7 +181,7 @@ export default class Input extends Component {
           underlineStyle={ underlineStyle }
           underlineFocusStyle={ underlineFocusStyle }
           underlineShow={ !hideUnderline }
-          value={ value }
+          value={ textValue }
         >
           { children }
         </TextField>
@@ -218,10 +231,11 @@ export default class Input extends Component {
   }
 
   onPaste = (event) => {
-    const value = event.clipboardData.getData('Text');
+    const { value } = event.target;
+    const pasted = event.clipboardData.getData('Text');
 
     window.setTimeout(() => {
-      this.onSubmit(value);
+      this.onSubmit(value + pasted);
     }, 0);
   }
 
@@ -229,7 +243,7 @@ export default class Input extends Component {
     const { value } = event.target;
 
     if (event.which === 13) {
-      this.onSubmit(value);
+      this.onSubmit(value, true);
     } else if (event.which === 27) {
       // TODO ESC, revert to original
     }
@@ -237,9 +251,17 @@ export default class Input extends Component {
     this.props.onKeyDown && this.props.onKeyDown(event);
   }
 
-  onSubmit = (value) => {
+  onSubmit = (value, performDefault) => {
+    const { onDefaultAction, onSubmit } = this.props;
+
     this.setValue(value, () => {
-      this.props.onSubmit && this.props.onSubmit(value);
+      if (onSubmit) {
+        onSubmit(value);
+      }
+
+      if (performDefault && onDefaultAction) {
+        onDefaultAction();
+      }
     });
   }
 
