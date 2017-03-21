@@ -1,0 +1,12 @@
+[package]
+name = "whisper"
+version = "0.1.0"
+authors = ["Parity Technologies <admin@parity.io>"]
+
+[dependencies]
+ethcore-network = { path = "../util/network" }
+rlp = { path = "../util/rlp" }
+ethcore-util = { path = "../util" }
+time = "0.1"
+ethkey = { path = "../ethkey" }
+rand = "0.3"
