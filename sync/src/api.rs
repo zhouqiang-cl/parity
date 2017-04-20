@@ -195,13 +195,15 @@ pub struct EthSync {
 impl EthSync {
 	/// Creates and register protocol with the network service
 	pub fn new(params: Params) -> Result<Arc<EthSync>, NetworkError> {
+		use light::net::request_credits::FlowParams;
+
 		let pruning_info = params.chain.pruning_info();
 		let light_proto = match params.config.serve_light {
 			false => None,
 			true => Some({
 				let light_params = LightParams {
 					network_id: params.config.network_id,
-					flow_params: Default::default(),
+					flow_params: FlowParams::free(),
 					capabilities: Capabilities {
 						serve_headers: true,
 						serve_chain_since: Some(pruning_info.earliest_chain),
@@ -681,12 +683,11 @@ impl LightSync {
 		where L: AsLightClient + Provider + Sync + Send + 'static
 	{
 		use light_sync::LightSync as SyncHandler;
-
 		// initialize light protocol handler and attach sync module.
 		let (sync, light_proto) = {
 			let light_params = LightParams {
 				network_id: params.network_id,
-				flow_params: Default::default(), // or `None`?
+				flow_params: Default::default(),
 				capabilities: Capabilities {
 					serve_headers: false,
 					serve_chain_since: None,
