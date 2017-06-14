@@ -480,7 +480,7 @@ impl BlockChainClient for TestBlockChainClient {
 		self.receipts.read().get(&id).cloned()
 	}
 
-	fn blocks_with_bloom(&self, _bloom: &H2048, _from_block: BlockId, _to_block: BlockId) -> Option<Vec<BlockNumber>> {
+	fn blocks_with_bloom(&self, _bloom: &H2048, _from_block: BlockId, _to_block: BlockId, _limit: Option<usize>) -> Option<Vec<BlockNumber>> {
 		unimplemented!();
 	}
 

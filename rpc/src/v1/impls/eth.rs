@@ -535,7 +535,12 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> Eth for EthClient<C, SN, S, M, EM> where
 
 	fn logs(&self, filter: Filter) -> BoxFuture<Vec<Log>, Error> {
 		let include_pending = filter.to_block == Some(BlockNumber::Pending);
-		let filter: EthcoreFilter = filter.into();
+		let mut filter: EthcoreFilter = filter.into();
+
+		if self.accounts.is_none() {
+			filter.block_limit = Some(128);
+		}
+
 		let mut logs = self.client.logs(filter.clone())
 			.into_iter()
 			.map(From::from)

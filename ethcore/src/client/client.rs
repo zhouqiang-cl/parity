@@ -1454,16 +1454,25 @@ impl BlockChainClient for Client {
 		self.engine.additional_params().into_iter().collect()
 	}
 
-	fn blocks_with_bloom(&self, bloom: &H2048, from_block: BlockId, to_block: BlockId) -> Option<Vec<BlockNumber>> {
+	fn blocks_with_bloom(&self, bloom: &H2048, from_block: BlockId, to_block: BlockId, limit: Option<usize>) -> Option<Vec<BlockNumber>> {
 		match (self.block_number(from_block), self.block_number(to_block)) {
-			(Some(from), Some(to)) => Some(self.chain.read().blocks_with_bloom(bloom, from, to)),
+			(Some(from), Some(mut to)) => {
+				if let Some(limit) = limit {
+					let cap = from + limit as BlockNumber;
+					if to > cap {
+						to = cap;
+					}
+				}
+
+				Some(self.chain.read().blocks_with_bloom(bloom, from, to))
+			},
 			_ => None
 		}
 	}
 
 	fn logs(&self, filter: Filter) -> Vec<LocalizedLogEntry> {
 		let blocks = filter.bloom_possibilities().iter()
-			.filter_map(|bloom| self.blocks_with_bloom(bloom, filter.from_block.clone(), filter.to_block.clone()))
+			.filter_map(|bloom| self.blocks_with_bloom(bloom, filter.from_block.clone(), filter.to_block.clone(), filter.block_limit.clone()))
 			.flat_map(|m| m)
 			// remove duplicate elements
 			.collect::<HashSet<u64>>()

@@ -48,6 +48,12 @@ pub struct Filter {
 	/// If None, return all logs
 	/// If specified, should only return *last* `n` logs.
 	pub limit: Option<usize>,
+
+	/// Block limit
+	///
+	/// If None, will search through all specified blocks.
+	/// If specified, this will limit the range of blocks the filter is applied to.
+	pub block_limit: Option<usize>
 }
 
 impl Clone for Filter {
@@ -68,6 +74,7 @@ impl Clone for Filter {
 			address: self.address.clone(),
 			topics: topics[..].to_vec(),
 			limit: self.limit,
+			block_limit: self.block_limit,
 		}
 	}
 }
@@ -125,6 +132,7 @@ mod tests {
 			address: None,
 			topics: vec![None, None, None, None],
 			limit: None,
+			block_limit: None,
 		};
 
 		let possibilities = none_filter.bloom_possibilities();
@@ -146,6 +154,7 @@ mod tests {
 				None,
 			],
 			limit: None,
+			block_limit: None,
 		};
 
 		let possibilities = filter.bloom_possibilities();
@@ -165,6 +174,7 @@ mod tests {
 				None,
 			],
 			limit: None,
+			block_limit: None,
 		};
 
 		let possibilities = filter.bloom_possibilities();

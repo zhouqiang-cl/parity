@@ -95,6 +95,7 @@ impl Into<EthFilter> for Filter {
 				]
 			},
 			limit: self.limit,
+			block_limit: None,
 		}
 	}
 }
