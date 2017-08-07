@@ -8,3 +8,4 @@ ethcore-bigint = { path = "../bigint" }
 
 [dev-dependencies]
 tiny-keccak = "1.2.1"
+rustc-hex = "1.0"
