@@ -569,6 +569,7 @@ dependencies = [
  "ethcore-logger 1.8.0",
  "ethcore-stratum 1.8.0",
  "ethcore-util 1.8.0",
+ "ethcrypto 0.1.0",
  "ethjson 0.1.0",
  "ethkey 0.2.0",
  "ethstore 0.1.0",
