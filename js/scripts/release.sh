@@ -28,16 +28,16 @@ rm -rf ./.git
 git init
 setup_git_user
 
-echo "*** Checking out js-precompiled#ewn branch"
+echo "*** Checking out js-precompiled#ewf branch"
 git remote add origin $GIT_JS_PRECOMPILED
 git fetch origin 2>$GITLOG
-git checkout -b ewn
+git checkout -b ewf
 
 echo "*** Committing compiled files for $UTCDATE"
 mv build ../build.new
 git add .
 git commit -m "$UTCDATE [update]"
-git merge origin/ewn -X ours --commit -m "$UTCDATE [merge]"
+git merge origin/ewf -X ours --commit -m "$UTCDATE [merge]"
 git rm -r build
 rm -rf build
 git commit -m "$UTCDATE [cleanup]"
@@ -46,7 +46,7 @@ git add .
 git commit -m "$UTCDATE [release]"
 
 echo "*** Merging remote"
-git push origin HEAD:refs/heads/ewn 2>$GITLOG
+git push origin HEAD:refs/heads/ewf 2>$GITLOG
 PRECOMPILED_HASH=`git rev-parse HEAD`
 
 # move to root
@@ -69,7 +69,7 @@ fi
 
 echo "*** Updating cargo parity-ui-precompiled#$PRECOMPILED_HASH"
 git submodule update
-sed -i "/^parity-ui-precompiled/ { s/branch = \".*\"/branch = \"ewn\"/g; }" dapps/ui/Cargo.toml
+sed -i "/^parity-ui-precompiled/ { s/branch = \".*\"/branch = \"ewf\"/g; }" dapps/ui/Cargo.toml
 cargo update -p parity-ui-precompiled
 # --precise "$PRECOMPILED_HASH"
 
