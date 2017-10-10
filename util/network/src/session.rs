@@ -37,6 +37,8 @@ use time;
 // Timeout must be less than (interval - 1).
 const PING_TIMEOUT_SEC: u64 = 60;
 const PING_INTERVAL_SEC: u64 = 120;
+const MIN_PROTOCOL_VERSION: u32 = 4;
+const MIN_COMPRESSION_PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Debug, Clone)]
 enum ProtocolState {
@@ -209,9 +211,8 @@ impl Session {
 		} else {
 			panic!("Unexpected state");
 		};
-		self.state = State::Session(connection);
 		self.write_hello(io, host)?;
-		self.send_ping(io)?;
+		self.state = State::Session(connection);
 		Ok(())
 	}
 
@@ -520,10 +521,14 @@ impl Session {
 			trace!(target: "network", "No common capabilities with peer.");
 			return Err(From::from(self.disconnect(io, DisconnectReason::UselessPeer)));
 		}
-		if protocol != host.protocol_version {
+		if protocol < MIN_PROTOCOL_VERSION {
 			trace!(target: "network", "Peer protocol version mismatch: {}", protocol);
 			return Err(From::from(self.disconnect(io, DisconnectReason::UselessPeer)));
 		}
+		if let State::Session(ref mut s) = self.state {
+			s.enable_compression(protocol >= MIN_COMPRESSION_PROTOCOL_VERSION);
+		}
+		self.send_ping(io)?;
 		self.had_hello = true;
 		Ok(())
 	}

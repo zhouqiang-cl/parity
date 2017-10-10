@@ -37,9 +37,11 @@ use rcrypto::buffer::*;
 use tiny_keccak::Keccak;
 use bytes::{Buf, BufMut};
 use crypto;
+use util::snappy;
 
 const ENCRYPTED_HEADER_LEN: usize = 32;
 const RECIEVE_PAYLOAD_TIMEOUT: u64 = 30000;
+const MAX_PAYLOAD_SIZE: usize = (1 << 24) - 1;
 
 pub trait GenericSocket : Read + Write {
 }
@@ -295,6 +297,8 @@ pub struct EncryptedConnection {
 	protocol_id: u16,
 	/// Payload expected to be received for the last header.
 	payload_len: usize,
+	/// Enable snappy compression.
+	compression: bool,
 }
 
 impl EncryptedConnection {
@@ -345,7 +349,8 @@ impl EncryptedConnection {
 			ingress_mac: ingress_mac,
 			read_state: EncryptedConnectionState::Header,
 			protocol_id: 0,
-			payload_len: 0
+			payload_len: 0,
+			compression: false,
 		};
 		enc.connection.expect(ENCRYPTED_HEADER_LEN);
 		Ok(enc)
@@ -354,8 +359,17 @@ impl EncryptedConnection {
 	/// Send a packet
 	pub fn send_packet<Message>(&mut self, io: &IoContext<Message>, payload: &[u8]) -> Result<(), NetworkError> where Message: Send + Clone + Sync + 'static {
 		let mut header = RlpStream::new();
+		let mut compressed = Vec::new();
+		let mut payload = payload; // create a reference with local lifetime
+		if self.compression {
+			if payload.len() > MAX_PAYLOAD_SIZE {
+				return Err(NetworkError::OversizedPacket);
+			}
+			let len = snappy::compress_into(&payload, &mut compressed);
+			payload = &compressed[0..len];
+		}
 		let len = payload.len();
-		if len >= (1 << 24) {
+		if len > MAX_PAYLOAD_SIZE {
 			return Err(NetworkError::OversizedPacket);
 		}
 		header.append_raw(&[(len >> 16) as u8, (len >> 8) as u8, len as u8], 1);
@@ -431,6 +445,12 @@ impl EncryptedConnection {
 		self.decoder.decrypt(&mut RefReadBuffer::new(&payload[0..self.payload_len]), &mut RefWriteBuffer::new(&mut packet), false).expect("Invalid length or padding");
 		let mut pad_buf = [0u8; 16];
 		self.decoder.decrypt(&mut RefReadBuffer::new(&payload[self.payload_len..(payload.len() - 16)]), &mut RefWriteBuffer::new(&mut pad_buf), false).expect("Invalid length or padding");
+		if self.compression {
+			if snappy::decompressed_len(&packet)? > MAX_PAYLOAD_SIZE {
+				return Err(NetworkError::OversizedPacket);
+			}
+			packet = snappy::decompress(&packet)?;
+		}
 		Ok(Packet {
 			protocol: self.protocol_id,
 			data: packet
@@ -476,6 +496,11 @@ impl EncryptedConnection {
 	pub fn writable<Message>(&mut self, io: &IoContext<Message>) -> Result<(), NetworkError> where Message: Send + Clone + Sync + 'static {
 		self.connection.writable(io)?;
 		Ok(())
+	}
+
+	/// Enable snappy compression.
+	pub fn enable_compression(&mut self, enable: bool) {
+		self.compression = enable;
 	}
 }
 
