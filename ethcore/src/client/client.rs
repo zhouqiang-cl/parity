@@ -159,6 +159,7 @@ pub struct Client {
 	miner: Arc<Miner>,
 	sleep_state: Mutex<SleepState>,
 	liveness: AtomicBool,
+	taking_snapshot: AtomicBool,
 	io_channel: Mutex<IoChannel<ClientIoMessage>>,
 	notify: RwLock<Vec<Weak<ChainNotify>>>,
 	queue_transactions: AtomicUsize,
@@ -233,6 +234,7 @@ impl Client {
 			enabled: AtomicBool::new(true),
 			sleep_state: Mutex::new(SleepState::new(awake)),
 			liveness: AtomicBool::new(awake),
+			taking_snapshot: AtomicBool::new(false),
 			mode: Mutex::new(config.mode.clone()),
 			chain: RwLock::new(chain),
 			tracedb: tracedb,
@@ -988,9 +990,11 @@ impl Client {
 
 	/// Tick the client.
 	// TODO: manage by real events.
-	pub fn tick(&self) {
+	pub fn tick(&self, prevent_sleep: bool) {
 		self.check_garbage();
-		self.check_snooze();
+		if !prevent_sleep {
+			self.check_snooze();
+		}
 	}
 
 	fn check_garbage(&self) {
@@ -1064,7 +1068,9 @@ impl Client {
 			},
 		};
 
+		self.taking_snapshot.store(true, AtomicOrdering::Relaxed);
 		snapshot::take_snapshot(&*self.engine, &self.chain.read(), start_hash, db.as_hashdb(), writer, p)?;
+		self.taking_snapshot.store(false, AtomicOrdering::Relaxed);
 
 		Ok(())
 	}
@@ -1098,21 +1104,21 @@ impl Client {
 		if !self.liveness.load(AtomicOrdering::Relaxed) {
 			self.liveness.store(true, AtomicOrdering::Relaxed);
 			self.notify(|n| n.start());
-			trace!(target: "mode", "wake_up: Waking.");
+			info!(target: "mode", "wake_up: Waking.");
 		}
 	}
 
 	fn sleep(&self) {
 		if self.liveness.load(AtomicOrdering::Relaxed) {
 			// only sleep if the import queue is mostly empty.
-			if self.queue_info().total_queue_size() <= MAX_QUEUE_SIZE_TO_SLEEP_ON {
+			if self.queue_info().total_queue_size() <= MAX_QUEUE_SIZE_TO_SLEEP_ON || self.taking_snapshot.load(AtomicOrdering::Relaxed) {
 				self.liveness.store(false, AtomicOrdering::Relaxed);
 				self.notify(|n| n.stop());
-				trace!(target: "mode", "sleep: Sleeping.");
+				info!(target: "mode", "sleep: Sleeping.");
 			} else {
-				trace!(target: "mode", "sleep: Cannot sleep - syncing ongoing.");
+				info!(target: "mode", "sleep: Cannot sleep - syncing ongoing.");
 				// TODO: Consider uncommenting.
-				//*self.last_activity.lock() = Some(Instant::now());
+				//(*self.sleep_state.lock()).last_activity = Some(Instant::now());
 			}
 		}
 	}
