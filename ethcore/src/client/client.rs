@@ -1068,9 +1068,9 @@ impl Client {
 			},
 		};
 
-		self.taking_snapshot.store(true, AtomicOrdering::Relaxed);
+		self.taking_snapshot.store(true, AtomicOrdering::AcqRel);
 		snapshot::take_snapshot(&*self.engine, &self.chain.read(), start_hash, db.as_hashdb(), writer, p)?;
-		self.taking_snapshot.store(false, AtomicOrdering::Relaxed);
+		self.taking_snapshot.store(false, AtomicOrdering::AcqRel);
 
 		Ok(())
 	}
@@ -1111,7 +1111,7 @@ impl Client {
 	fn sleep(&self) {
 		if self.liveness.load(AtomicOrdering::Relaxed) {
 			// only sleep if the import queue is mostly empty.
-			if self.queue_info().total_queue_size() <= MAX_QUEUE_SIZE_TO_SLEEP_ON || self.taking_snapshot.load(AtomicOrdering::Relaxed) {
+			if self.queue_info().total_queue_size() <= MAX_QUEUE_SIZE_TO_SLEEP_ON || self.taking_snapshot.load(AtomicOrdering::AcqRel) {
 				self.liveness.store(false, AtomicOrdering::Relaxed);
 				self.notify(|n| n.stop());
 				info!(target: "mode", "sleep: Sleeping.");
